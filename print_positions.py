@@ -198,10 +198,11 @@ def qr_command(value, slot, ecc=QR_ECC, module_dots=QR_MODULE_DOTS):
         raise ValueError("QR ECC must be one of L, M, Q, H")
     if not 1 <= module_dots <= 10:
         raise ValueError("QR module size must be 1..10 dots")
-    x = (slot - 1) * PITCH
-    # The printer chooses the QR version from the payload. Keep the origin inset
-    # so the symbol's quiet area is less likely to touch the label boundary.
-    return f'QRCODE {x + 4},4,{ecc},{module_dots},A,0,M2,S7,"{value}"\r\n'
+    x = (slot - 1) * PITCH + CELL // 2
+    y = CELL // 2
+    # J5 centers the printer-generated symbol inside a one-cell square area.
+    return (f'QRCODE {x},{y},{ecc},{module_dots},A,0,'
+            f'X{CELL},J5,M2,S7,"{value}"\r\n')
 
 
 def make_print_job(kind, value, slot, font=DEFAULT_FONT, ecc=QR_ECC,

@@ -42,7 +42,10 @@ class PrintJobTests(unittest.TestCase):
 
     def test_qr_command_uses_native_tspl_and_slot_offset(self):
         command = printer.make_print_job("qr", "https://example.com/123", 2)
-        self.assertIn('QRCODE 88,4,M,1,A,0,M2,S7,"https://example.com/123"', command)
+        self.assertIn(
+            'QRCODE 114,30,M,1,A,0,X60,J5,M2,S7,"https://example.com/123"',
+            command,
+        )
 
     def test_json_job_defaults_and_validation(self):
         job = printer.json_job('{"type":"text","data":"OK","slot":8}')
