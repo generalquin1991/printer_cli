@@ -35,7 +35,7 @@ Use the single-cell interface for new integrations. The `/` separator is only us
 - `--return-rows N` controls reverse motion before printing, from `0` to `119`. Default: `0`. The current, unverified positioning estimate uses `0` for the first print and `previous present_rows + 1` to target another cell in that row. For example, after a job with `present_rows=5`, it estimates `return_rows=6`. This assumes one row of print motion plus the previous presentation motion; validate on the actual printer before relying on it.
 - `--speed` sets print and paper-motion speed in IPS. Supported values are `1, 1.5, 2, 2.5, 3, 3.5, 4, 5`; default: `1.5`. Standalone `feed` and `back` commands also accept it.
 - `--font` selects built-in font 1 to 5; default: `2`. Single-cell text that exceeds the 5 × 5 mm label boundary is rejected.
-- QR codes use the printer's native TSPL `QRCODE` command and are centered in the selected 5 × 5 mm cell. `--ecc` accepts `L/M/Q/H`, and `--module-size` sets module width in dots from 1 to 10. Defaults are `M` and `1`. The label severely limits QR capacity and readability; test the actual payload, printer, and scanner.
+- QR codes use the printer's native TSPL `QRCODE` command with an `X60,J5` 60-dot area to request centering in the selected 5 × 5 mm cell. A short `Q1` job was accepted by the TE344, but visual alignment has not yet been confirmed. `--ecc` accepts `L/M/Q/H`, and `--module-size` sets module width in dots from 1 to 10. Defaults are `M` and `1`. The label severely limits QR capacity and readability; test the actual payload, printer, and scanner.
 - Single-cell text and QR payloads accept printable ASCII only, including JSON input. In this interface `/` is a literal character.
 - `status --json` queries status without moving the media. `capabilities` always emits JSON and does not connect to the printer.
 - `feed 0` and `back 0` succeed without connecting to the device or sending commands.
@@ -59,7 +59,7 @@ The legacy `print TEXT --size N --pos N` interface remains available for existin
 
 Print and paper-motion commands check the printer model and readiness first. `status` only queries status; `capabilities` and help commands do not connect to the device. Print and motion stop if the printer is not ready.
 
-**Hardware test record (2026-10-12):** A previous long forward/reverse test reported `0x02: paper jam`. Manually tightening the ribbon and pressing Feed/Pause restored readiness. A test with `SET TEAR ON` and a one-row return did not reach the intended row. The current explicit `return_rows`/`present_rows` positioning model still needs a hardware test printing different cells in the same row. Do not use this positioning model in production until that test passes.
+**Hardware test record (2026-10-12):** A previous long forward/reverse test reported `0x02: paper jam`. Manually tightening the ribbon and pressing Feed/Pause restored readiness. A test with `SET TEAR ON` and a one-row return did not reach the intended row. A short `Q1` QR job using `X60,J5` and `present_rows=5` completed and the printer returned to `normal`, but visual alignment has not been confirmed; earlier text/QR placement was reported as off. The same-row estimate `return_rows = previous present_rows + 1` (6 with the default presentation) has not passed physical alignment testing. Do not use same-row positioning in production yet.
 
 ## 1. Help
 
@@ -135,10 +135,10 @@ Chinese font and encoding support is not configured. Use simple ASCII letters an
 ### Print motion and paper position
 
 - Each job sends `SET TEAR OFF` to disable firmware tear-off positioning that could change the between-job paper position.
-- `present_rows` controls extra forward motion after `PRINT` and defaults to 5 rows. To print another cell in the same horizontal row, the current model uses `--return-rows 0` for the first job and estimates the next job's return as the preceding `present_rows + 1` (6 after the default presentation of 5).
+- `present_rows` controls extra forward motion after `PRINT` and defaults to 5 rows. To print another cell in the same horizontal row, the current model uses `--return-rows 0` for the first job and estimates the next job's return as the preceding `present_rows + 1` (6 after the default presentation of 5). This estimate is unverified on the physical label path.
 - `--return-rows` describes paper position explicitly; the CLI does not persist state across processes. Pressing FEED, pulling or tearing media, or replacing the roll invalidates the assumed position. Establish a new baseline and start with `--return-rows 0`.
 - `--next` is disabled. Use `--return-rows` for explicit reverse positioning.
-- The CLI does not track physical row numbers. The caller must choose the return amount based on the previous job. Separate jobs can target different cells, but the two-row compensation model needs hardware validation before production use.
+- The CLI does not track physical row numbers. The caller must choose the return amount based on the previous job. Separate jobs can target different cells, but the presentation/backfeed compensation needs hardware validation before production use.
 - Normal printing does not send `GAPDETECT` or `HOME` and does not automatically recover a lost paper-position baseline.
 
 ## 3. Forward motion: `feed`
@@ -229,4 +229,4 @@ Fixed print settings include `OFFSET 0 mm`, `LIMITFEED 20 mm`, tear-off/peel/cut
 
 `GAPDETECT` actively feeds media to calibrate it, and `HOME` seeks a label position. Neither is a motion-free setup command; both are excluded from normal printing.
 
-Protocol reference: the locally downloaded [TSC TSPL/TSPL2 Programming Manual 3.0](TSPL_TSPL2_Programming_Manual_3.0.pdf), especially the `PRINT`, `BACKFEED & BACKUP`, `SET BACK`, `SET TEAR`, and `SET RIBBON` sections. It defines `PRINT` label sets/copies and `BACKFEED` reverse distances in dots, and warns that inappropriate reverse distances can jam or wrinkle media. `SET RIBBON` does not adjust ribbon tension; `SET BACK` is not ribbon synchronization; and `SET TEAR ON` does not promise to return to the same horizontal row. The two-row compensation model for `PRINT + presentation FEED + same-row BACKFEED` still needs validation on this printer.
+Protocol reference: the locally downloaded [TSC TSPL/TSPL2 Programming Manual 3.0](TSPL_TSPL2_Programming_Manual_3.0.pdf), especially the `PRINT`, `BACKFEED & BACKUP`, `SET BACK`, `SET TEAR`, and `SET RIBBON` sections. It defines `PRINT` label sets/copies and `BACKFEED` reverse distances in dots, and warns that inappropriate reverse distances can jam or wrinkle media. `SET RIBBON` does not adjust ribbon tension; `SET BACK` is not ribbon synchronization; and `SET TEAR ON` does not promise to return to the same horizontal row. The QR `X...` area and `J5` justification request centering; the relationship between presentation FEED and same-row BACKFEED still needs validation on this printer.
