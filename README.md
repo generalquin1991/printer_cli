@@ -1,24 +1,67 @@
-# TE344 打印命令使用说明
+# TE344 Printer CLI
 
-本文对应当前项目的 `print_positions.py` 和 `probe_te344.py`，列出这两个脚本的全部命令行入口，不是打印机完整 TSPL 指令手册。
+English (default) | [简体中文](README.zh-CN.md)
 
-## 使用前提与纸张配置
+This guide documents the command-line interfaces in `print_positions.py` and `probe_te344.py`. It is not a complete TSPL programming reference.
 
-在项目目录运行以下命令，使用已有虚拟环境 `.venv/bin/python`。脚本依赖 PyUSB 和可用的 USB 后端，通过 USB 直接连接打印机，不通过系统打印队列。
+## Requirements and media configuration
 
-当前配置固定为：
+Run commands from the project directory with the existing `.venv/bin/python` environment. The scripts require PyUSB and a working USB backend. They communicate directly with the printer over USB, not through the operating system print queue.
 
-- 设备：TE344，USB VID:PID 为 `1203:0273`。
-- 分辨率：300 DPI，按 12 dots/mm 换算。
-- 每行 8 列；每个标签按 5 × 5 mm 计算，列间距和行间隙均为 2 mm。
-- 整行打印区域宽 54 mm、高 5 mm。
-- 一行纸张节距为 7 mm，即 84 点；不是 5 mm。
+The current media configuration is fixed:
 
-除帮助命令外，`print_positions.py` 的命令会先连接打印机、查询型号并检查就绪状态。设备未就绪会停止，不继续发送走纸或打印作业。
+- Printer: TE344, USB VID:PID `1203:0273`.
+- Resolution: 300 DPI, using 12 dots/mm.
+- Eight cells per row; each label is 5 × 5 mm, with 2 mm column and row gaps.
+- Full-row print area: 54 mm wide × 5 mm high.
+- Row pitch: 7 mm (84 dots), including the gap.
 
-**当前已出现过 `0x02: paper jam`。以下示例是使用说明，不表示故障已解除。故障状态下不要连续重试或长距离回退。**
+## Commands for GUI and CLI integrations
 
-## 1. 查看帮助
+Use the single-cell interface for new integrations. The `/` separator is only used by the legacy text interface.
+
+```sh
+.venv/bin/python print_positions.py print text --data "A123" --slot 3 --font 2 --present-rows 5 --return-rows 0 --speed 1.5
+.venv/bin/python print_positions.py print text --data "B456" --slot 4 --font 2 --present-rows 5 --return-rows 6 --speed 1.5
+.venv/bin/python print_positions.py print qr --data "https://example.com/123" --slot 3
+.venv/bin/python print_positions.py status --json
+.venv/bin/python print_positions.py capabilities
+.venv/bin/python print_positions.py feed 1
+.venv/bin/python print_positions.py back 1 --speed 1.5
+```
+
+- `--slot` selects a cell in the current row, from 1 to 8. It does not automatically find the next unused cell.
+- `--present-rows N` controls extra forward motion after printing, in 7 mm rows, so a person can remove the label. Default: `5`; use `0` for no extra motion. Set it on each job or use JSON `present_rows`.
+- `--return-rows N` controls reverse motion before printing, from `0` to `119`. Default: `0`. The current, unverified positioning estimate uses `0` for the first print and `previous present_rows + 1` to target another cell in that row. For example, after a job with `present_rows=5`, it estimates `return_rows=6`. This assumes one row of print motion plus the previous presentation motion; validate on the actual printer before relying on it.
+- `--speed` sets print and paper-motion speed in IPS. Supported values are `1, 1.5, 2, 2.5, 3, 3.5, 4, 5`; default: `1.5`. Standalone `feed` and `back` commands also accept it.
+- `--font` selects built-in font 1 to 5; default: `2`. Single-cell text that exceeds the 5 × 5 mm label boundary is rejected.
+- QR codes use the printer's native TSPL `QRCODE` command. `--ecc` accepts `L/M/Q/H`, and `--module-size` sets module width in dots from 1 to 10. Defaults are `M` and `1`. The 5 × 5 mm label severely limits QR capacity and readability; test the actual payload, printer, and scanner.
+- Single-cell text and QR payloads accept printable ASCII only, including JSON input. In this interface `/` is a literal character.
+- `status --json` queries status without moving the media. `capabilities` always emits JSON and does not connect to the printer.
+- `feed 0` and `back 0` succeed without connecting to the device or sending commands.
+
+A GUI can send one JSON job on standard input:
+
+```sh
+printf '%s' '{"type":"text","data":"A123","slot":3,"font":2,"present_rows":5,"return_rows":0,"speed":1.5}' \
+  | .venv/bin/python print_positions.py print --json -
+```
+
+Example QR job:
+
+```json
+{"type":"qr","data":"https://example.com/123","slot":3,"ecc":"M","module_size":1,"present_rows":5,"return_rows":6,"speed":1.5}
+```
+
+On success, JSON print commands emit `{"ok":true,...}` to stdout and diagnostics to stderr. Invalid input exits with code 2; device and print errors use 3 and 4. An error after a USB write may mean that the printer already executed part of the job, so do not retry blindly.
+
+The legacy `print TEXT --size N --pos N` interface remains available for existing manual workflows. `--next` is disabled. Use `print text/qr` or JSON input for new integrations.
+
+Print and paper-motion commands check the printer model and readiness first. `status` only queries status; `capabilities` and help commands do not connect to the device. Print and motion stop if the printer is not ready.
+
+**Hardware test record (2026-10-12):** A previous long forward/reverse test reported `0x02: paper jam`. Manually tightening the ribbon and pressing Feed/Pause restored readiness. A test with `SET TEAR ON` and a one-row return did not reach the intended row. The current explicit `return_rows`/`present_rows` positioning model still needs a hardware test printing different cells in the same row. Do not use this positioning model in production until that test passes.
+
+## 1. Help
 
 ```sh
 .venv/bin/python print_positions.py --help
@@ -27,174 +70,163 @@
 .venv/bin/python print_positions.py back --help
 ```
 
-各处均可用 `-h` 代替 `--help`。这些帮助命令不会连接打印机或走纸。
+`-h` is equivalent to `--help`. These commands do not connect to the printer or move media.
 
-## 2. 打印：print
-
-语法：
+## 2. Legacy text printing
 
 ```sh
-.venv/bin/python print_positions.py print TEXT --size {1,2,3,4,5} [--pos COLUMN] [--next]
+.venv/bin/python print_positions.py print TEXT [--size {1,2,3,4,5}] [--pos COLUMN]
 ```
 
-参数说明：
+- `TEXT` is required. Separate adjacent columns with `/`; quote the argument.
+- `--size` selects built-in font 1 to 5; default: `2`. It is not a dimension in millimeters or a font scale factor.
+- `--pos` selects the starting column, from 1 to 8; default: `1`.
+- `--next` is disabled. Supplying it fails before connecting. Use the standalone `feed` command for explicit forward motion.
 
-- `TEXT`：必填，打印内容。用 `/` 分隔相邻列的内容；建议始终用引号包围。
-- `--size`：必填，选择内置字体编号 1～5，不是毫米尺寸或字号倍数。
-- `--pos`：可选，起始列，范围 1～8，默认 1。
-- `--next`：可选，在打印前额外前进一行，发送 `FEED 84`。
-
-### 单列打印
-
-在当前纸张定位基础上，向第 1 列打印：
+Print in column 1 from the current paper position:
 
 ```sh
 .venv/bin/python print_positions.py print "zz" --size 1 --pos 1
 ```
 
-先额外前进一行，再向第 7 列打印：
+Advance one row explicitly, then print in column 7:
 
 ```sh
-.venv/bin/python print_positions.py print "zz" --size 1 --pos 7 --next
+.venv/bin/python print_positions.py feed 1
+.venv/bin/python print_positions.py print "zz" --size 1 --pos 7
 ```
 
-### 同一行多列打印
-
-从第 1 列开始打印 8 个值，只发送一次打印作业：
+Print eight values starting at column 1 in one job:
 
 ```sh
 .venv/bin/python print_positions.py print "1/2/3/4/5/6/7/8" --size 1
 ```
 
-从第 3 列开始，依次在第 3、4、5 列打印：
+Print in columns 3, 4, and 5:
 
 ```sh
 .venv/bin/python print_positions.py print "A/B/C" --size 2 --pos 3
 ```
 
-空字段跳过对应列。下面在第 1、3 列打印，第 2 列不绘制内容：
+Empty fields reserve a column without printing. This prints in columns 1 and 3, leaving column 2 blank:
 
 ```sh
 .venv/bin/python print_positions.py print "A//C" --size 2 --pos 1
 ```
 
-空字段仍占用列位置，包括开头或末尾的空字段。起始列加字段数量不能超出第 8 列，否则退出并报错。
+Leading and trailing empty fields also occupy columns. The starting column plus the number of fields must fit within the eight columns.
 
-### 字体与内容限制
+### Fonts and text limits
 
-当前代码使用的单字符宽 × 高（单位：点）：
+Character dimensions in dots:
 
-- `--size 1`：8 × 12。
-- `--size 2`：12 × 20。
-- `--size 3`：16 × 24。
-- `--size 4`：24 × 32。
-- `--size 5`：32 × 48。
+| Font | Width × height |
+| --- | --- |
+| 1 | 8 × 12 |
+| 2 | 12 × 20 |
+| 3 | 16 × 24 |
+| 4 | 24 × 32 |
+| 5 | 32 × 48 |
 
-每格为 60 × 60 点。脚本按上述尺寸计算居中位置；超长文本不会自动缩小、换行或按单格裁切，可能越过标签边界。字体 5 在单格中仅容得下一个上述宽度的字符。
+Each cell is 60 × 60 dots. Text is centered using these dimensions. The legacy interface does not shrink, wrap, or clip oversized text, so it may cross label boundaries. Font 5 fits only one character of its listed width in a cell. The single-cell interface rejects oversized text.
 
-当前没有中文字体或编码支持配置，请使用简单英文、数字等 ASCII 文本。`/` 固定用作分列符，没有打印字面斜杠的命令行选项。不要向文本传入换行符或原始打印机控制指令。
+Chinese font and encoding support is not configured. Use simple ASCII letters and numbers. In the legacy interface, `/` is always a column separator, and there is no option to print a literal slash. Do not pass newlines or raw printer commands as text.
 
-### “当前行”和“下一行”的实际含义
+### Print motion and paper position
 
-- 不加 `--next`：只是不执行额外的 `FEED`，不代表打印期间纸张保持静止。
-- 加 `--next`：先前进 84 点，再执行 `PRINT 1,1`；打印过程本身也会走纸。因此总走纸距离不能简单视为只有 7 mm。
-- 脚本不跟踪物理行号，也不会自动回到上一次打印的位置。连续执行两个 `print` 不能保证在同一物理行补印；同一行的多个值应使用 `/` 在一个作业中发送。
-- 当前普通打印不会发送 `GAPDETECT` 或 `HOME`，也不会自动修复失准的纸张定位。
+- Each job sends `SET TEAR OFF` to disable firmware tear-off positioning that could change the between-job paper position.
+- `present_rows` controls extra forward motion after `PRINT` and defaults to 5 rows. To print another cell in the same horizontal row, the current model uses `--return-rows 0` for the first job and estimates the next job's return as the preceding `present_rows + 1` (6 after the default presentation of 5).
+- `--return-rows` describes paper position explicitly; the CLI does not persist state across processes. Pressing FEED, pulling or tearing media, or replacing the roll invalidates the assumed position. Establish a new baseline and start with `--return-rows 0`.
+- `--next` is disabled. Use `--return-rows` for explicit reverse positioning.
+- The CLI does not track physical row numbers. The caller must choose the return amount based on the previous job. Separate jobs can target different cells, but the two-row compensation model needs hardware validation before production use.
+- Normal printing does not send `GAPDETECT` or `HOME` and does not automatically recover a lost paper-position baseline.
 
-## 3. 前进：feed
+## 3. Forward motion: `feed`
 
 ```sh
-.venv/bin/python print_positions.py feed [ROWS]
+.venv/bin/python print_positions.py feed [ROWS] [--speed IPS]
 ```
 
-`ROWS` 为可选整数，默认 1，代码允许范围为 1～119。每行前进 84 点（7 mm），不打印文本。
+`ROWS` is an optional integer from 0 to 119, defaulting to 1. Each row advances 84 dots (7 mm) without printing. `0` is a no-op and does not connect to the printer. `--speed` adjusts motion speed.
 
 ```sh
-# 前进 1 行
 .venv/bin/python print_positions.py feed
-
-# 前进 2 行，即 14 mm
 .venv/bin/python print_positions.py feed 2
 ```
 
-实际发送 `FEED ROWS×84`。TSPL 的 `FEED` 参数单位是点，不是标签张数；命令行的 `ROWS` 才是本脚本定义的行数。
+The script sends `FEED ROWS×84`. TSPL's `FEED` argument is in dots, not label count; `ROWS` is the unit defined by this CLI.
 
-## 4. 回退：back
+## 4. Reverse motion: `back`
 
 ```sh
-.venv/bin/python print_positions.py back [ROWS]
+.venv/bin/python print_positions.py back [ROWS] [--speed IPS]
 ```
 
-`ROWS` 为可选整数，默认 1，代码允许范围同样为 1～119。
+`ROWS` is an optional integer from 0 to 119, defaulting to 1. `0` is a no-op and does not connect to the printer. `--speed` adjusts motion speed.
 
 ```sh
-# 回退 1 行，即 7 mm
 .venv/bin/python print_positions.py back
 ```
 
-实际发送 `BACKFEED ROWS×84`。这是相对位移，不是“撤销上一次打印”，不会消除已经印出的文字，也不保证重新对齐之前的行。
+The script sends `BACKFEED ROWS×84`. This is relative motion, not an undo operation: it does not erase printed content or guarantee alignment with an earlier row. Print jobs use `--return-rows` to request this motion explicitly. The accepted maximum of 119 rows is a protocol limit, not a safe reverse distance; keep return moves small and use a low speed when appropriate.
 
-**允许的数值上限不是安全回退距离。** 长距离回退可能造成纸张或碳带松弛、褶皱、卡纸。只有纸路正常、确实需要回退时才小步操作；故障时不要靠反复回退复位。
+**The numeric maximum is not a safe reverse distance.** Long reverse movements can loosen or wrinkle media or ribbon and cause jams. Use small steps only when reverse motion is needed and the paper path is healthy. Do not repeatedly reverse to recover from a fault.
 
-`feed` 和 `back` 都会先发送 `CLS`、`SET BACK ON`、`SPEED 2`，但不会重新设置 `SIZE` 或 `GAP`，也不执行校准。
+Both `feed` and `back` send `CLS` and the selected `SPEED`, but do not reset `SIZE` or `GAP` or calibrate media. The manual's `SET BACK` controls label return after cutting; it is not ribbon synchronization and is not sent.
 
-## 5. USB 探测及方框试印：probe_te344.py
+## 5. USB probe and box test: `probe_te344.py`
 
 ```sh
 .venv/bin/python probe_te344.py
 ```
 
-此脚本没有实现命令行参数解析，会：
+This script does not parse command-line arguments. It opens the USB device and displays its serial number, interfaces, and endpoints; queries status, printer information, and model; sets `SIZE 5 mm, 5 mm` and `GAP 2 mm, 0 mm`; draws `BOX 4,4,28,28,2` and executes `PRINT 1`; then reads status again.
 
-1. 打开目标 USB 设备，显示序列号、接口及端点。
-2. 查询状态、打印机信息和型号。
-3. 设置 `SIZE 5 mm, 5 mm`、`GAP 2 mm, 0 mm`。
-4. 绘制 `BOX 4,4,28,28,2` 并执行一次 `PRINT 1`。
-5. 再次读取状态。
+**This script prints and changes the media-size setting.** It uses a 5 mm-wide test area instead of the main script's 54 mm full-row area, and does not use the main script's model and readiness checks. Do not run `probe_te344.py --help`: it ignores arguments and still runs the print test.
 
-**这不是只读状态查询，会真实打印并改变纸张尺寸设置。** 它使用单个 5 mm 宽的测试区域，而不是主脚本的 54 mm 整行区域。它也没有主脚本的型号匹配与就绪拦截逻辑。
+## 6. Logs and errors
 
-不要执行 `probe_te344.py --help` 来查看帮助：该脚本忽略命令行参数，仍会运行试印流程。
+- `model reply: b'TE344'`: expected printer model received.
+- `TX ... bytes`: command bytes written, followed by the command text. This does not confirm a successful physical print.
+- `status 0x00: normal`: printer reports normal status.
+- `status 0x20: printing`: printer is busy; this may also appear during paper motion and does not confirm text was printed.
+- `done`: the script completed its flow; it does not confirm alignment or print quality.
 
-## 6. 日志和错误含义
+Recognized status codes:
 
-- `model reply: b'TE344'`：设备返回型号 TE344。
-- `TX ... bytes`：已写入的命令字节数，随后列出发送内容；不等于实物打印成功。
-- `status 0x00: normal`：设备报告正常。
-- `status 0x20: printing`：设备忙碌，走纸时也可能出现；不代表已印出文字。
-- `done`：脚本完成当前流程，不是纸张位置或印刷质量的实物验收。
+| Code | Meaning |
+| --- | --- |
+| `0x01` | Print head open |
+| `0x02` | Paper jam / paper-motion detection fault |
+| `0x03` | Paper jam and print head open |
+| `0x04` | Out of paper |
+| `0x05` | Out of paper and print head open |
+| `0x08` | Out of ribbon |
+| `0x09` | Out of ribbon and print head open |
+| `0x0A` | Out of ribbon and paper jam |
+| `0x0B` | Out of ribbon, paper jam, and print head open |
+| `0x0C` | Out of ribbon and out of paper |
+| `0x0D` | Out of ribbon, out of paper, and print head open |
+| `0x10` | Pause |
+| `0x80` | Other error |
 
-当前脚本识别的其他状态：
+Common errors:
 
-- `0x01`：打印头打开。
-- `0x02`：卡纸/走纸检测异常。
-- `0x03`：卡纸且打印头打开。
-- `0x04`：缺纸。
-- `0x05`：缺纸且打印头打开。
-- `0x08`：缺碳带。
-- `0x09`：缺碳带且打印头打开。
-- `0x0A`：缺碳带且卡纸。
-- `0x0B`：缺碳带、卡纸且打印头打开。
-- `0x0C`：缺碳带且缺纸。
-- `0x0D`：缺碳带、缺纸且打印头打开。
-- `0x10`：暂停。
-- `0x80`：其他错误。
+- `TE344 not found`: the specified USB device was not found.
+- `Printer did not answer model TE344`: unexpected model response; printing stops.
+- `printer not ready: ...`: pre-job readiness check failed; no subsequent print or motion command was sent.
+- `printer error: ...`: an error was detected while waiting; part of the job may have run.
+- `printer did not run`: no complete busy-to-ready cycle was confirmed. The printer may still have moved; do not blindly retry.
+- `no reply`: no status response was received. The current post-motion check for `feed/back` may still print `done` without a response; this does not confirm successful movement.
 
-常见退出信息：
+On `paper jam`, inspect the media, ribbon, and sensor position. Gap detection or positioning faults can also produce this status; the code alone does not prove a mechanical jam. The CLI has no fault-clear or reset command.
 
-- `TE344 not found`：未找到指定 USB 设备。
-- `Printer did not answer model TE344`：型号回复不符合预期，不继续打印。
-- `printer not ready: ...`：作业前检查未通过，未发送后续打印/走纸命令。
-- `printer error: ...`：等待动作时检测到错误，作业可能已经部分执行。
-- `printer did not run`：等待期间未确认完整的忙碌到就绪周期；不一定代表设备完全没动，不要盲目重发。
-- `no reply`：没有收到状态回复。当前 `feed/back` 的动作后检查可能在无回复时仍输出 `done`，不能据此确认走纸成功。
+## 7. Commands not yet available
 
-出现 `paper jam` 时，先检查纸张、碳带和传感器位置。此状态也可能与间隙检测或定位失败有关，不能只凭状态码确定机械卡死。代码没有清错或复位命令。
+The CLI provides `print`, `status`, `capabilities`, `feed`, and `back`. It does not provide calibration, reset, job cancellation, copy count, Chinese printing, automatic unused-slot selection, or configurable media dimensions.
 
-## 7. 当前没有提供的命令
+Fixed print settings include `OFFSET 0 mm`, `LIMITFEED 20 mm`, tear-off/peel/cutter disabled, `DIRECTION 1`, `REFERENCE 0,0`, `SHIFT 0`, and `DENSITY 12`. `SPEED` is set by `--speed` or JSON `speed`, defaulting to 1.5 IPS.
 
-主脚本只有 `print`、`feed`、`back` 三个子命令以及帮助入口；没有独立的 `status`、`calibrate`、`reset`、取消作业、份数、中文打印或参数化纸张尺寸命令。
+`GAPDETECT` actively feeds media to calibrate it, and `HOME` seeks a label position. Neither is a motion-free setup command; both are excluded from normal printing.
 
-打印时固定发送的设置包含 `OFFSET 0 mm`、`LIMITFEED 20 mm`、关闭撕纸/剥离/切刀、`DIRECTION 1`、`REFERENCE 0,0`、`SHIFT 0`、`SPEED 2`、`DENSITY 12`。这些设置目前不能通过命令行修改。
-
-`GAPDETECT` 是会主动走纸的校准命令，`HOME` 是寻标定位命令，不应视为不走纸的普通设置。当前代码已从日常打印流程中移除两者。
+Protocol reference: the locally downloaded [TSC TSPL/TSPL2 Programming Manual 3.0](TSPL_TSPL2_Programming_Manual_3.0.pdf), especially the `PRINT`, `BACKFEED & BACKUP`, `SET BACK`, `SET TEAR`, and `SET RIBBON` sections. It defines `PRINT` label sets/copies and `BACKFEED` reverse distances in dots, and warns that inappropriate reverse distances can jam or wrinkle media. `SET RIBBON` does not adjust ribbon tension; `SET BACK` is not ribbon synchronization; and `SET TEAR ON` does not promise to return to the same horizontal row. The two-row compensation model for `PRINT + presentation FEED + same-row BACKFEED` still needs validation on this printer.
