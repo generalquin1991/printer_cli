@@ -2,8 +2,8 @@
 
 from PIL import Image
 
-from content import RasterContent, TextContent, generate_text
-from media import MediaProfile
+from ..application.content import RasterContent, TextContent, generate_text
+from .profile import MediaProfile
 
 
 def fit_to_cell(content, media, fit="contain"):

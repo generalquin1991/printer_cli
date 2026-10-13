@@ -1,10 +1,10 @@
 from PIL import Image
 import unittest
 
-from content import RasterContent, decode_image, generate_qr
-from layout import render_row
-from jobs import Placement, PrintRequest
-from media import MediaProfile
+from printer.application.content import RasterContent, decode_image, generate_qr
+from printer.application.jobs import Placement, PrintRequest
+from printer.media.layout import render_row
+from printer.media.profile import MediaProfile
 
 
 class ContentAndLayoutTests(unittest.TestCase):

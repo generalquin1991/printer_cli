@@ -76,4 +76,6 @@ def load_media_profile(path):
     return media
 
 
-DEFAULT_MEDIA = load_media_profile(Path(__file__).with_name("media.default.json"))
+DEFAULT_MEDIA = load_media_profile(
+    Path(__file__).resolve().parents[2] / "media.default.json"
+)

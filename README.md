@@ -63,11 +63,17 @@ The JSON `type` is `text`, `qr`, `image`, or `row`; image jobs use `image_base64
 
 ### Layer boundaries
 
-- `content.py`: creates/decodes text, QR, and image content; no printer protocol or USB.
-- `media.py`, `jobs.py`, `layout.py`: validated geometry, request data, and printer-independent row rasterization.
-- `pipeline.py`, `tspl_backend.py`: render requests and serialize row rasters/motion as TSPL.
-- `printer_executor.py`: USB and readiness handling over opaque byte payloads.
-- `printer_cli.py`: CLI orchestration. `print_positions.py` remains the compatibility entry point.
+- `printer/application/content.py`, `printer/application/jobs.py`, `printer/application/pipeline.py`: content, request models, and application pipeline.
+- `printer/media/profile.py`, `printer/media/layout.py`: validated geometry and printer-independent row rasterization.
+- `printer/backend/tspl.py`: serializes row rasters and motion as TSPL.
+- `printer/execution/usb.py`: USB and readiness handling over opaque byte payloads.
+- `printer/cli.py`: CLI orchestration. `print_positions.py` remains the compatibility entry point.
+
+The implementation is grouped under `printer/`: application logic is in `printer/application/`, media geometry/layout in `printer/media/`, TSPL serialization in `printer/backend/`, USB execution in `printer/execution/`, and CLI orchestration in `printer/cli.py`. The root `printer_cli.py` and `print_positions.py` files are compatibility entry points. Tests are under `tests/`:
+
+```sh
+.venv/bin/python -m unittest discover -s tests -q
+```
 
 The `probe_te344.py` script is a separate diagnostic that performs a real test print and changes printer settings; it is not a read-only probe.
 

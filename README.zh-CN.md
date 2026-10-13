@@ -63,11 +63,17 @@ JSON 的 `type` 为 `text`、`qr`、`image` 或 `row`；图片使用 `image_base
 
 ## 分层结构
 
-- `content.py`：生成/解码文本、二维码和图像，不依赖打印协议或 USB。
-- `media.py`、`jobs.py`、`layout.py`：介质几何、作业数据和独立于打印机的整行栅格布局。
-- `pipeline.py`、`tspl_backend.py`：组装作业，并将行位图/走纸动作编码为 TSPL。
-- `printer_executor.py`：对不透明作业字节进行 USB 传输及状态检查。
-- `printer_cli.py`：命令行编排；`print_positions.py` 保留为兼容入口。
+- `printer/application/content.py`、`printer/application/jobs.py`、`printer/application/pipeline.py`：内容、作业模型和应用层流水线。
+- `printer/media/profile.py`、`printer/media/layout.py`：介质几何和独立于打印机的整行栅格布局。
+- `printer/backend/tspl.py`：将行位图和走纸动作编码为 TSPL。
+- `printer/execution/usb.py`：对不透明作业字节进行 USB 传输及状态检查。
+- `printer/cli.py`：命令行编排；`print_positions.py` 保留为兼容入口。
+
+实际实现已按层放入 `printer/`：应用层在 `printer/application/`，介质几何和布局在 `printer/media/`，TSPL 编码在 `printer/backend/`，USB 执行在 `printer/execution/`，命令行编排在 `printer/cli.py`。根目录的 `printer_cli.py` 和 `print_positions.py` 只是兼容入口。测试位于 `tests/`：
+
+```sh
+.venv/bin/python -m unittest discover -s tests -q
+```
 
 `probe_te344.py` 是独立诊断脚本，会实际试印并改变打印机设置，不是只读探测。
 

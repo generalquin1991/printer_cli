@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from content import RasterContent, TextContent
+from .content import RasterContent, TextContent
 
 
 @dataclass(frozen=True)

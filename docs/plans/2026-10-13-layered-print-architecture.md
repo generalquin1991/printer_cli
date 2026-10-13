@@ -13,6 +13,7 @@ Separate content generation, media layout, printer-language encoding, and device
 5. [x] Move USB discovery, transfer, and status handling behind an execution interface that accepts opaque job bytes.
 6. [x] Keep the CLI as an adapter; add `render` and `send` commands while retaining `print text/qr/image` convenience commands.
 7. [x] Add isolated unit tests, update both READMEs, and run hardware-free verification. Hardware acceptance remains manual.
+8. [x] Organize implementation modules into a `printer/` package by layer, move tests under `tests/`, preserve root CLI entry points, and verify every documented path/command against the resulting tree.
 
 ## Constraints
 
@@ -27,3 +28,12 @@ Separate content generation, media layout, printer-language encoding, and device
 - Batch 1: steps 1-3, verify content/layout tests and default CLI compatibility.
 - Batch 2: steps 4-7, verified rendered job bytes, mocked execution, CLI behavior, and documentation; 15 unit tests pass.
 - Physical image/QR print and scan validation is not automated and must be reported separately.
+
+## Follow-up: Package Layout
+
+- Move application content, job models, and pipeline into `printer/application/`.
+- Move media profiles and row layout into `printer/media/`.
+- Move TSPL serialization into `printer/backend/` and USB execution into `printer/execution/`.
+- Place CLI orchestration in `printer/cli.py`; keep `print_positions.py` and `printer_cli.py` as root compatibility entry points.
+- Move unit tests into `tests/` and update imports, test commands, and architecture documentation.
+- Verified with `.venv/bin/python -m unittest discover -s tests -q`, bytecode compilation, `capabilities`, and offline `render`.

@@ -9,13 +9,13 @@ from unittest.mock import patch
 
 from PIL import Image
 
-import printer_cli
-from content import RasterContent
-from jobs import Placement, PrintRequest
-from media import DEFAULT_MEDIA, MediaProfile
-from pipeline import render_request
-from printer_executor import PrinterExecutor
-from tspl_backend import TSPLBackend
+import printer.cli as printer_cli
+from printer.application.content import RasterContent
+from printer.application.jobs import Placement, PrintRequest
+from printer.application.pipeline import render_request
+from printer.backend.tspl import TSPLBackend
+from printer.execution.usb import PrinterExecutor
+from printer.media.profile import DEFAULT_MEDIA, MediaProfile
 
 
 class PipelineTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class CliTests(unittest.TestCase):
         args = printer_cli.parse_args([
             "print", "image", "--base64-stdin", "--slot", "1", "--present-rows", "0"
         ])
-        with patch("printer_cli.sys.stdin", FakeStdin()):
+        with patch("printer.cli.sys.stdin", FakeStdin()):
             request = printer_cli.request_from_args(args, DEFAULT_MEDIA)
         self.assertEqual(request.placements[0].content.kind, "image")
 
@@ -241,7 +241,7 @@ class ExecutionTests(unittest.TestCase):
         executor = PrinterExecutor(transport)
         with (patch.object(executor, "status", side_effect=[(0x20, "printing"),
                                                               (0x00, "normal")]),
-              patch("printer_executor.time.sleep")):
+              patch("printer.execution.usb.time.sleep")):
             result = executor.execute(b"\x00opaque job\xff", timeout=1)
         self.assertEqual(transport.writes, [b"\x00opaque job\xff"])
         self.assertTrue(result["cycle_observed"])

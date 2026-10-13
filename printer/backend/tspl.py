@@ -1,7 +1,7 @@
 """Serialize printer-independent row rasters and motion into TSPL bytes."""
 
-from layout import aligned_bitmap_bytes
-from media import MediaProfile
+from ..media.layout import aligned_bitmap_bytes
+from ..media.profile import MediaProfile
 
 
 class TSPLBackend:

@@ -2,10 +2,10 @@
 
 from dataclasses import dataclass
 
-from layout import render_row
-from jobs import PrintRequest
-from media import MediaProfile
-from tspl_backend import TSPLBackend
+from ..backend.tspl import TSPLBackend
+from ..media.layout import render_row
+from ..media.profile import MediaProfile
+from .jobs import PrintRequest
 
 
 @dataclass(frozen=True)
