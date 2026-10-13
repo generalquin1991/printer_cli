@@ -4,90 +4,19 @@
 import argparse
 import base64
 import contextlib
-import io
 import json
-import math
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import usb.core
 import usb.util
+from content import decode_image
+from layout import aligned_bitmap_bytes, fit_to_cell
+from media import DEFAULT_MEDIA, MediaProfile, load_media_profile
 
 VID = 0x1203
 PID = 0x0273
-@dataclass(frozen=True)
-class MediaProfile:
-    name: str
-    resolution_dpi: int
-    dots_per_mm: float
-    columns: int
-    label_width_mm: float
-    label_height_mm: float
-    column_gap_mm: float
-    row_gap_mm: float
-
-    @property
-    def cell_width_dots(self):
-        return round(self.label_width_mm * self.dots_per_mm)
-
-    @property
-    def cell_height_dots(self):
-        return round(self.label_height_mm * self.dots_per_mm)
-
-    @property
-    def column_pitch_dots(self):
-        return round((self.label_width_mm + self.column_gap_mm) * self.dots_per_mm)
-
-    @property
-    def row_pitch_dots(self):
-        return round((self.label_height_mm + self.row_gap_mm) * self.dots_per_mm)
-
-    @property
-    def media_width_mm(self):
-        return self.columns * self.label_width_mm + (self.columns - 1) * self.column_gap_mm
-
-
-def load_media_profile(path):
-    try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot read media profile: {exc}") from exc
-    expected = {"name", "resolution_dpi", "dots_per_mm", "columns",
-                "label_width_mm", "label_height_mm", "column_gap_mm", "row_gap_mm"}
-    if not isinstance(raw, dict) or set(raw) != expected:
-        raise ValueError("media profile must contain exactly: " + ", ".join(sorted(expected)))
-    if not isinstance(raw["name"], str) or not raw["name"].strip():
-        raise ValueError("media profile name must be a non-empty string")
-    integer_fields = ("resolution_dpi", "columns")
-    number_fields = ("dots_per_mm", "label_width_mm", "label_height_mm",
-                     "column_gap_mm", "row_gap_mm")
-    for key in integer_fields:
-        if isinstance(raw[key], bool) or not isinstance(raw[key], int) or raw[key] <= 0:
-            raise ValueError(f"media profile {key} must be a positive integer")
-    for key in number_fields:
-        if isinstance(raw[key], bool) or not isinstance(raw[key], (int, float)):
-            raise ValueError(f"media profile {key} must be a positive number")
-        if not math.isfinite(raw[key]):
-            raise ValueError(f"media profile {key} must be finite")
-        if raw[key] <= 0 and key in ("dots_per_mm", "label_width_mm", "label_height_mm"):
-            raise ValueError(f"media profile {key} must be positive")
-        if raw[key] < 0:
-            raise ValueError(f"media profile {key} cannot be negative")
-    if raw["columns"] > 99:
-        raise ValueError("media profile columns must be at most 99")
-    media = MediaProfile(**raw)
-    if min(media.cell_width_dots, media.cell_height_dots, media.row_pitch_dots) < 1:
-        raise ValueError("media profile dimensions must resolve to at least one dot")
-    if round(media.media_width_mm * media.dots_per_mm) > 9999:
-        raise ValueError("media profile width exceeds the TSPL coordinate limit")
-    if media.row_pitch_dots > 9999:
-        raise ValueError("media profile row pitch exceeds the TSPL distance limit")
-    return media
-
-
-DEFAULT_MEDIA = load_media_profile(Path(__file__).with_name("media.default.json"))
 # Built-in font dimensions are fixed by the printer firmware.
 FONTS = {
     1: (8, 12),
@@ -309,46 +238,14 @@ def make_print_job(kind, value, slot, font=DEFAULT_FONT, ecc=QR_ECC,
 
 
 def image_bitmap(image_bytes, slot, fit="contain", threshold=128, media=DEFAULT_MEDIA):
-    try:
-        from PIL import Image, ImageOps
-    except ImportError as exc:
-        raise ValueError("image printing requires Pillow; install requirements.txt") from exc
     if not 1 <= slot <= media.columns:
         raise ValueError(f"slot must be 1..{media.columns}")
-    if fit not in ("contain", "stretch"):
-        raise ValueError("image fit must be contain or stretch")
-    if not 0 <= threshold <= 255:
-        raise ValueError("threshold must be 0..255")
-    try:
-        source = Image.open(io.BytesIO(image_bytes))
-    except Exception as exc:
-        raise ValueError(f"cannot decode image: {exc}") from exc
-    if source.width * source.height > 20_000_000:
-        raise ValueError("source image exceeds 20 megapixels")
-    try:
-        source.load()
-    except Exception as exc:
-        raise ValueError(f"cannot decode image: {exc}") from exc
     cell_w, cell_h = media.cell_width_dots, media.cell_height_dots
-    source = ImageOps.exif_transpose(source).convert("RGBA")
-    background = Image.new("RGBA", source.size, "white")
-    source = Image.alpha_composite(background, source).convert("L")
-    if fit == "contain":
-        source.thumbnail((cell_w, cell_h), Image.Resampling.LANCZOS)
-        canvas = Image.new("L", (cell_w, cell_h), 255)
-        canvas.paste(source, ((cell_w - source.width) // 2,
-                              (cell_h - source.height) // 2))
-        source = canvas
-    else:
-        source = source.resize((cell_w, cell_h), Image.Resampling.LANCZOS)
-    source = source.point(lambda value: 0 if value < threshold else 255).convert("1")
-    byte_width = (cell_w + 7) // 8
-    padded = Image.new("1", (byte_width * 8, cell_h), 1)
-    padded.paste(source, (0, 0))
-    raw = padded.tobytes()
+    content = decode_image(image_bytes, threshold)
+    source = fit_to_cell(content, media, fit)
+    byte_width, raw = aligned_bitmap_bytes(source)
     x = (slot - 1) * media.column_pitch_dots + (cell_w - byte_width * 8) // 2
-    y = 0
-    return x, y, byte_width, cell_h, raw
+    return x, 0, byte_width, cell_h, raw
 
 
 def make_image_job(image_bytes, slot, speed=DEFAULT_SPEED, fit="contain",
