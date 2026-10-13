@@ -50,6 +50,16 @@ base64 < ./logo.png | .venv/bin/python print_positions.py render image \
 - `feed [N]` 和 `back [N]` 支持 1～100 行，省略数量时默认为 1。默认逐行发送，并等待状态正常后再发送下一行；例如 `feed 5` 会依次发送 5 条独立的 `FEED 84`。只有 `feed` 支持 `--continuous`，例如 `feed 5 --continuous` 会一次发送 `FEED 420`。状态正常不能证明纸实际移动；进退纸是相对移动，不是撤销或对位功能。
 - `--speed` 支持 `1, 1.5, 2, 2.5, 3, 3.5, 4, 5` IPS。`capabilities` 可校验并显示介质几何参数，不连接打印机。
 
+## nRF ChipID 与 CF81 标签
+
+下面的单行示例将 nRF ChipID `ad80a31073adcf81` 拆成 4 段放在第 1～4 位，`CF81` 拆成 `CF`、`81` 放在第 5、6 位；第 7、8 位打印相同二维码，二维码内容为 `ad80a31073adcf81-CF81`。文字字号使用 3；软件会在每个 5 × 5 mm 标签格内居中栅格内容。二维码使用 ECC L 和 1 点模块，打印后需用实际扫码器确认识读效果。
+
+```sh
+printf '%s\n' '{"type":"row","placements":[{"type":"text","slot":1,"data":"ad80","font":3},{"type":"text","slot":2,"data":"a310","font":3},{"type":"text","slot":3,"data":"73ad","font":3},{"type":"text","slot":4,"data":"cf81","font":3},{"type":"text","slot":5,"data":"CF","font":3},{"type":"text","slot":6,"data":"81","font":3},{"type":"qr","slot":7,"data":"ad80a31073adcf81-CF81","ecc":"L","module_size":1},{"type":"qr","slot":8,"data":"ad80a31073adcf81-CF81","ecc":"L","module_size":1}],"present_rows":0,"return_rows":0}' | .venv/bin/python print_positions.py print --json -
+```
+
+软件居中只指栅格内容在标签格内居中；若实物整体偏位，需检查打印起始位置和介质走纸对位，命令行目前没有手动偏移参数。
+
 ## 重复混合打印测试
 
 先手动将纸张归位到起始位置。下面的循环每次打印一行：第 1～4 槽为 `A/B/C/D`，第 5～8 槽为内容 `Q1/Q2/Q3/Q4` 的二维码。共执行 10 次；每次打印后一次性前进 4 行，等待 2 秒，再将 3 行回退逐行执行：
