@@ -31,6 +31,16 @@ def nonnegative_rows(value):
     return rows
 
 
+def motion_rows(value):
+    try:
+        rows = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("row count must be an integer") from exc
+    if not 1 <= rows <= 100:
+        raise argparse.ArgumentTypeError("motion row count must be from 1 to 100")
+    return rows
+
+
 def add_content_args(parser, *, required_target):
     parser.add_argument("target", nargs=None if required_target else "?",
                         choices=("text", "qr", "image") if required_target else None,
@@ -75,8 +85,11 @@ def parse_args(argv):
     send_parser.add_argument("--json", action="store_true")
 
     for name in ("feed", "back"):
-        motion = sub.add_parser(name, help=f"move exactly one configured row {name}ward")
-        motion.add_argument("rows", nargs="?", type=int, choices=(1,), default=1)
+        motion = sub.add_parser(name, help=f"move one row at a time, up to 100 rows")
+        motion.add_argument("rows", nargs="?", type=motion_rows, default=1)
+        if name == "feed":
+            motion.add_argument("--continuous", action="store_true",
+                                help="send one FEED command for all requested rows")
         motion.add_argument("--speed", type=float, choices=SPEEDS, default=DEFAULT_SPEED)
         motion.add_argument("--media-config",
                             default=str(Path(__file__).with_name("media.default.json")))
@@ -128,15 +141,18 @@ def request_from_json(raw, media):
         raise ValueError(f"invalid JSON: {exc.msg}") from exc
     if not isinstance(job, dict):
         raise ValueError("JSON print request must be an object")
-    allowed = {"type", "data", "image_base64", "slot", "font", "ecc",
+    allowed = {"type", "data", "image_base64", "slot", "placements", "font", "ecc",
                "module_size", "present_rows", "return_rows", "speed", "fit", "threshold"}
     unknown = set(job) - allowed
     if unknown:
         raise ValueError(f"unknown JSON field(s): {', '.join(sorted(unknown))}")
     kind = job.get("type")
     slot = job.get("slot")
-    if isinstance(slot, bool) or not isinstance(slot, int) or not 1 <= slot <= media.columns:
+    if kind != "row" and (isinstance(slot, bool) or not isinstance(slot, int)
+                          or not 1 <= slot <= media.columns):
         raise ValueError(f"slot must be an integer from 1 to {media.columns}")
+    if kind == "row" and any(key in job for key in ("data", "image_base64", "slot")):
+        raise ValueError("row jobs specify data and slots inside placements only")
     font = job.get("font", DEFAULT_FONT)
     ecc = job.get("ecc", "M")
     module_size = job.get("module_size", 1)
@@ -179,8 +195,47 @@ def request_from_json(raw, media):
         except (ValueError, binascii.Error) as exc:
             raise ValueError("image_base64 must be valid Base64") from exc
         placements.append(Placement(slot, decode_image(decoded, job.get("threshold", 128))))
+    elif kind == "row":
+        items = job.get("placements")
+        if not isinstance(items, list) or not 1 <= len(items) <= media.columns:
+            raise ValueError(f"row placements must be a list of 1..{media.columns} items")
+        seen_slots = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("each row placement must be an object")
+            item_allowed = {"type", "slot", "data", "font", "ecc", "module_size"}
+            item_unknown = set(item) - item_allowed
+            if item_unknown:
+                raise ValueError(f"unknown placement field(s): {', '.join(sorted(item_unknown))}")
+            item_type = item.get("type")
+            item_slot = item.get("slot")
+            if (isinstance(item_slot, bool) or not isinstance(item_slot, int)
+                    or not 1 <= item_slot <= media.columns):
+                raise ValueError(f"placement slot must be an integer from 1 to {media.columns}")
+            if item_slot in seen_slots:
+                raise ValueError(f"row contains duplicate slot {item_slot}")
+            seen_slots.add(item_slot)
+            if item_type == "text":
+                item_font = item.get("font", font)
+                if isinstance(item_font, bool) or not isinstance(item_font, int):
+                    raise ValueError("placement font must be an integer")
+                value = validate_ascii(item.get("data"), "text")
+                generate_text(value, item_font)
+                placements.append(Placement(item_slot, TextContent(value, item_font)))
+            elif item_type == "qr":
+                item_ecc = item.get("ecc", ecc)
+                item_size = item.get("module_size", module_size)
+                if (isinstance(item_size, bool) or not isinstance(item_size, int)
+                        or not 1 <= item_size <= 10
+                        or item_ecc not in ("L", "M", "Q", "H")):
+                    raise ValueError("invalid placement QR module size or ECC")
+                value = validate_ascii(item.get("data"), "QR data")
+                placements.append(Placement(item_slot,
+                                            generate_qr(value, item_ecc, item_size)))
+            else:
+                raise ValueError("row placement type must be text or qr")
     else:
-        raise ValueError("type must be text, qr, or image")
+        raise ValueError("type must be text, qr, image, or row")
     if kind == "text":
         generate_text(placements[0].content.text, font)
     if fit not in ("contain", "stretch"):
@@ -190,7 +245,7 @@ def request_from_json(raw, media):
             raise ValueError(f"{name} must be a non-negative integer")
         if rows * media.row_pitch_dots > 9999:
             raise ValueError(f"{name} exceeds the TSPL movement limit")
-    if slot + len(placements) - 1 > media.columns:
+    if kind != "row" and slot + len(placements) - 1 > media.columns:
         raise ValueError("content exceeds the remaining slots in the row")
     return PrintRequest(tuple(placements), present_rows, return_rows, speed, fit)
 
@@ -253,15 +308,51 @@ def emit_json(value):
     print(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
 
 
-def execute_motion(executor, backend, command, rows, speed):
-    payload = backend.encode_motion(command, rows, speed)
-    if rows == 0:
-        return {"command_sent": False, "status_code": None, "status": "no movement"}
-    print(f"{command} {rows} row(s), {rows * backend.media.row_pitch_dots} dots")
-    result = executor.execute(payload, observe_cycle=False,
-                              settle_seconds=0.4 * rows + 0.5)
-    print(f"status 0x{result['status_code']:02x}: {result['status']}")
-    return {"command_sent": True, **result, "movement_confirmed_by_status": False}
+def execute_motion(executor, backend, command, rows, speed, continuous=False):
+    max_rows = 9999 // backend.media.row_pitch_dots
+    if isinstance(rows, bool) or not isinstance(rows, int) or not 1 <= rows <= max_rows:
+        raise ValueError(f"motion row count must be from 1 to {max_rows}")
+    if continuous:
+        payload = backend.encode_motion(command, rows, speed)
+        print(f"{command} {rows} row(s), {rows * backend.media.row_pitch_dots} dots (single command)")
+        try:
+            result = executor.execute(payload, observe_cycle=False,
+                                      settle_seconds=0.4 * rows + 0.5)
+        except PrinterError as exc:
+            raise MotionExecutionError(command, rows, 0, exc, continuous=True) from exc
+        print(f"status 0x{result['status_code']:02x}: {result['status']}")
+        return {"command_sent": True, "commands_sent": 1,
+                "rows_submitted": rows, **result,
+                "movement_confirmed_by_status": False}
+    last_result = None
+    completed = 0
+    for index in range(rows):
+        payload = backend.encode_motion(command, 1, speed)
+        print(f"{command} row {index + 1}/{rows}, {backend.media.row_pitch_dots} dots")
+        try:
+            last_result = executor.execute(payload, observe_cycle=False, settle_seconds=0.9)
+        except PrinterError as exc:
+            raise MotionExecutionError(command, rows, completed, exc) from exc
+        completed += 1
+        print(f"status 0x{last_result['status_code']:02x}: {last_result['status']}")
+    return {"command_sent": True, "commands_sent": completed,
+            "rows_submitted": completed,
+            **last_result, "movement_confirmed_by_status": False}
+
+
+class MotionExecutionError(PrinterError):
+    def __init__(self, command, rows_requested, rows_completed, cause, continuous=False):
+        self.command = command
+        self.rows_requested = rows_requested
+        self.rows_completed = rows_completed
+        self.continuous = continuous
+        if continuous:
+            message = (f"{command} {rows_requested} was sent as one command; "
+                       f"physical movement is uncertain: {cause}")
+        else:
+            message = (f"{command} stopped after {rows_completed}/{rows_requested} "
+                       f"status-confirmed rows; movement of the current row is uncertain: {cause}")
+        super().__init__(message)
 
 
 def main(argv=None):
@@ -280,7 +371,7 @@ def main(argv=None):
                    "gap_mm": {"column": media.column_gap_mm, "row": media.row_gap_mm},
                    "slot_count": media.columns, "media_width_mm": media.media_width_mm,
                    "row_pitch_mm": media.label_height_mm + media.row_gap_mm,
-                   "types": ["text", "qr", "image"]})
+                   "types": ["text", "qr", "image", "row"]})
         return 0
 
     if args.command == "send":
@@ -380,14 +471,19 @@ def main(argv=None):
         backend = TSPLBackend(media)
         with PrinterExecutor.connect() as executor:
             executor.prepare()
-            result = execute_motion(executor, backend, command, args.rows, args.speed)
+            result = execute_motion(executor, backend, command, args.rows, args.speed,
+                                    continuous=getattr(args, "continuous", False))
         if args.json:
             emit_json({"ok": True, "device": "TE344", "command": command,
                        "rows": args.rows, **result})
         return 0
     except (ValueError, PrinterError) as exc:
         if args.json:
-            emit_json({"ok": False, "error": str(exc), "code": "printer_error"})
+            failure = {"ok": False, "error": str(exc), "code": "printer_error"}
+            if isinstance(exc, MotionExecutionError):
+                failure.update(command=exc.command, rows_requested=exc.rows_requested,
+                               rows_completed=exc.rows_completed)
+            emit_json(failure)
         else:
             print(f"printer error: {exc}", file=sys.stderr)
         return 4

@@ -30,12 +30,13 @@ Use the existing `.venv/bin/python` environment. Dependencies are listed in `req
 base64 < ./logo.png | .venv/bin/python print_positions.py render image \
   --base64-stdin --slot 1 --output /tmp/logo.tspl
 
-# Text, status, device/media capabilities, and one-row motion
+# Text, status, device/media capabilities, and motion (one row per transfer)
 .venv/bin/python print_positions.py print text --data A123 --slot 1 --present-rows 0
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
-.venv/bin/python print_positions.py feed
-.venv/bin/python print_positions.py back
+.venv/bin/python print_positions.py feed 5
+.venv/bin/python print_positions.py feed 5 --continuous
+.venv/bin/python print_positions.py back 3
 ```
 
 ### Content and layout
@@ -46,7 +47,7 @@ base64 < ./logo.png | .venv/bin/python print_positions.py render image \
 - Image input requires exactly one of `--file PATH` or `--base64-stdin`. `--fit contain` preserves aspect ratio and centers on the cell; `stretch` fills it. `--threshold` is 0–255. Image source files are limited to 30 MB and 20 megapixels.
 - `--slot` is 1-based. `--present-rows` controls optional motion after printing and defaults to 5; use `0` to suppress it. `--return-rows` controls reverse motion before printing and defaults to 0. Same-row return alignment is not physically validated; do not assume a return count restores a prior label position.
 - Text is printable ASCII and is rasterized with Pillow. `--font` (or legacy `--size`) selects application font size 1–5; it is not a printer font number. Legacy `print TEXT --size N --pos N` and slash-separated columns remain available for older manual workflows.
-- `feed` and `back` are intentionally limited to one row per invocation. Each is relative movement, not an undo or alignment operation. Neither proves physical movement from the returned status.
+- `feed [N]` and `back [N]` accept 1–100 rows (default 1). By default they send and wait for each row separately. `feed N --continuous` sends one `FEED` command for `N` row pitches; it is not available for `back`. A completed status does not prove physical movement. These are relative movements, not undo or alignment operations.
 - `--speed` supports `1, 1.5, 2, 2.5, 3, 3.5, 4, 5` IPS. `capabilities` validates and reports media geometry without connecting to the printer.
 
 ### JSON requests
@@ -58,7 +59,7 @@ printf '%s' '{"type":"qr","data":["Q1","Q2"],"slot":1,"present_rows":0}' \
   | .venv/bin/python print_positions.py print --json -
 ```
 
-The JSON `type` is `text`, `qr`, or `image`; image jobs use `image_base64`. Optional fields include `slot`, `font`, `ecc`, `module_size`, `fit`, `threshold`, `speed`, `present_rows`, and `return_rows`. Unknown fields are rejected. `print --json -` emits machine-readable output; `physical_output_verified:false` means software cannot confirm visible print quality. `send --json` is also available.
+The JSON `type` is `text`, `qr`, `image`, or `row`; image jobs use `image_base64`. A `row` job uses a `placements` array, with each entry specifying `type` (`text` or `qr`), `slot`, and `data`, so mixed content prints in one row and one print operation. Optional global fields include `font`, `ecc`, `module_size`, `fit`, `threshold`, `speed`, `present_rows`, and `return_rows`. Unknown fields are rejected. `print --json -` emits machine-readable output; `physical_output_verified:false` means software cannot confirm visible print quality. `send --json` is also available.
 
 ### Layer boundaries
 

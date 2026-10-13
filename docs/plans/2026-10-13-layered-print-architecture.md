@@ -17,7 +17,7 @@ Separate content generation, media layout, printer-language encoding, and device
 ## Constraints
 
 - Preserve the current 8-slot, 5 x 5 mm label geometry and 2 mm horizontal/vertical gaps by default.
-- Keep feed/back limited to one row per invocation.
+- Encode feed/back motion from the media profile; default multi-row requests execute one row at a time, with opt-in continuous FEED only.
 - Content generation must not import USB or printer-language modules.
 - Device execution must not interpret whether a job contains text, QR, or an image.
 - Do not stage or remove the pre-existing untracked manual PDF or bytecode cache.

@@ -1,6 +1,7 @@
 import base64
 from contextlib import redirect_stdout
 from io import BytesIO, StringIO
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -85,6 +86,26 @@ class CliTests(unittest.TestCase):
                 '{"type":"text","data":"A","slot":1,"speed":true}',
                 DEFAULT_MEDIA,
             )
+
+    def test_json_row_can_mix_text_and_qr_in_one_print_job(self):
+        placements = [
+            {"type": "text", "slot": slot, "data": letter}
+            for slot, letter in enumerate("ABCD", start=1)
+        ] + [
+            {"type": "qr", "slot": slot, "data": f"Q{slot - 4}",
+             "module_size": 1, "ecc": "M"}
+            for slot in range(5, 9)
+        ]
+        request = printer_cli.request_from_json(
+            json.dumps({
+                "type": "row", "placements": placements, "present_rows": 0,
+            }),
+            DEFAULT_MEDIA,
+        )
+        rendered = render_request(request, DEFAULT_MEDIA)
+        self.assertEqual([item.slot for item in request.placements], list(range(1, 9)))
+        self.assertEqual(rendered.payload.count(b"PRINT 1,1"), 1)
+        self.assertEqual(rendered.raster.size, (648, 60))
         with self.assertRaisesRegex(ValueError, "threshold"):
             printer_cli.request_from_json(
                 '{"type":"image","image_base64":"","slot":1,"threshold":true}',
@@ -132,12 +153,78 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(printer_cli.main(["send", str(path)]), 0)
         self.assertEqual(calls, [(payload, {"observe_cycle": True})])
 
-    def test_feed_and_back_remain_one_row(self):
+    def test_feed_and_back_accept_counts_but_encode_single_rows(self):
+        self.assertEqual(printer_cli.parse_args(["feed", "3"]).rows, 3)
+        self.assertEqual(printer_cli.parse_args(["back", "12"]).rows, 12)
+        self.assertTrue(printer_cli.parse_args(["feed", "3", "--continuous"]).continuous)
         with self.assertRaises(SystemExit):
-            printer_cli.parse_args(["feed", "2"])
+            printer_cli.parse_args(["feed", "0"])
+        with self.assertRaises(SystemExit):
+            printer_cli.parse_args(["back", "101"])
+        with self.assertRaises(SystemExit):
+            printer_cli.parse_args(["back", "3", "--continuous"])
         backend = TSPLBackend(DEFAULT_MEDIA)
         self.assertIn(b"FEED 84\r\n", backend.encode_motion("FEED", 1))
         self.assertIn(b"BACKFEED 84\r\n", backend.encode_motion("BACKFEED", 1))
+
+    def test_multirow_motion_sends_and_waits_one_row_at_a_time(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.calls = []
+            def execute(self, payload, **kwargs):
+                self.calls.append((payload, kwargs))
+                return {"status_code": 0, "status": "normal"}
+
+        executor = FakeExecutor()
+        output = StringIO()
+        with redirect_stdout(output):
+            result = printer_cli.execute_motion(
+                executor, TSPLBackend(DEFAULT_MEDIA), "FEED", 3, 1.5
+            )
+        self.assertEqual(len(executor.calls), 3)
+        self.assertTrue(all(call[0].endswith(b"FEED 84\r\n") for call in executor.calls))
+        self.assertTrue(all(call[1] == {"observe_cycle": False, "settle_seconds": 0.9}
+                             for call in executor.calls))
+        self.assertEqual(result["rows_submitted"], 3)
+
+    def test_continuous_feed_sends_one_combined_motion_command(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.calls = []
+            def execute(self, payload, **kwargs):
+                self.calls.append((payload, kwargs))
+                return {"status_code": 0, "status": "normal"}
+
+        executor = FakeExecutor()
+        with redirect_stdout(StringIO()):
+            result = printer_cli.execute_motion(
+                executor, TSPLBackend(DEFAULT_MEDIA), "FEED", 3, 1.5, continuous=True
+            )
+        self.assertEqual(len(executor.calls), 1)
+        self.assertTrue(executor.calls[0][0].endswith(b"FEED 252\r\n"))
+        self.assertEqual(executor.calls[0][1]["observe_cycle"], False)
+        self.assertAlmostEqual(executor.calls[0][1]["settle_seconds"], 1.7)
+        self.assertEqual(result["commands_sent"], 1)
+        self.assertEqual(result["rows_submitted"], 3)
+
+    def test_multirow_motion_stops_and_reports_completed_rows_on_error(self):
+        class FakeExecutor:
+            def __init__(self):
+                self.calls = 0
+            def execute(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 2:
+                    raise printer_cli.PrinterError("not ready")
+                return {"status_code": 0, "status": "normal"}
+
+        executor = FakeExecutor()
+        with redirect_stdout(StringIO()):
+            with self.assertRaises(printer_cli.MotionExecutionError) as caught:
+                printer_cli.execute_motion(
+                    executor, TSPLBackend(DEFAULT_MEDIA), "BACKFEED", 4, 1.5
+                )
+        self.assertEqual(executor.calls, 2)
+        self.assertEqual(caught.exception.rows_completed, 1)
 
 
 class ExecutionTests(unittest.TestCase):

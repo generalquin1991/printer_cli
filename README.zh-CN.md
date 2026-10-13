@@ -30,12 +30,13 @@
 base64 < ./logo.png | .venv/bin/python print_positions.py render image \
   --base64-stdin --slot 1 --output /tmp/logo.tspl
 
-# 文本、状态、设备/介质能力，以及每次一行的走纸
+# 文本、状态、设备/介质能力，以及逐行走纸
 .venv/bin/python print_positions.py print text --data A123 --slot 1 --present-rows 0
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
-.venv/bin/python print_positions.py feed
-.venv/bin/python print_positions.py back
+.venv/bin/python print_positions.py feed 5
+.venv/bin/python print_positions.py feed 5 --continuous
+.venv/bin/python print_positions.py back 3
 ```
 
 ## 内容与布局
@@ -46,7 +47,7 @@ base64 < ./logo.png | .venv/bin/python print_positions.py render image \
 - 图片输入必须二选一：`--file PATH` 或 `--base64-stdin`。`--fit contain` 保持比例并在标签内居中留白；`stretch` 拉伸铺满。`--threshold` 范围是 0～255。图片文件最大 30 MB，解码像素数最多 20 MP。
 - `--slot` 从 1 开始。`--present-rows` 控制打印后的额外走纸，默认 5；设为 `0` 则不额外走纸。`--return-rows` 控制打印前回退，默认 0。同行回退定位未经实机验证，不要假定某个回退行数可以准确回到先前标签。
 - 文本仅接受可打印 ASCII，由 Pillow 栅格化。`--font`（旧参数 `--size`）选择应用层字号 1～5，不是打印机字体编号。为兼容旧人工流程，仍保留 `print TEXT --size N --pos N` 及用 `/` 分隔列内容的语法。
-- `feed` 和 `back` 每次调用严格限制一行。这是相对走纸，不是撤销或对位功能；状态回复也不能证明纸实际移动。
+- `feed [N]` 和 `back [N]` 支持 1～100 行，省略数量时默认为 1。默认逐行发送，并等待状态正常后再发送下一行；例如 `feed 5` 会依次发送 5 条独立的 `FEED 84`。只有 `feed` 支持 `--continuous`，例如 `feed 5 --continuous` 会一次发送 `FEED 420`。状态正常不能证明纸实际移动；进退纸是相对移动，不是撤销或对位功能。
 - `--speed` 支持 `1, 1.5, 2, 2.5, 3, 3.5, 4, 5` IPS。`capabilities` 可校验并显示介质几何参数，不连接打印机。
 
 ## JSON 请求
@@ -58,7 +59,7 @@ printf '%s' '{"type":"qr","data":["Q1","Q2"],"slot":1,"present_rows":0}' \
   | .venv/bin/python print_positions.py print --json -
 ```
 
-JSON 的 `type` 为 `text`、`qr` 或 `image`；图片使用 `image_base64`。可选字段包括 `slot`、`font`、`ecc`、`module_size`、`fit`、`threshold`、`speed`、`present_rows` 和 `return_rows`。未知字段会被拒绝。`print --json -` 输出机器可读结果；`physical_output_verified:false` 表示软件不能验证纸面可见效果。`send --json` 也可输出 JSON。
+JSON 的 `type` 为 `text`、`qr`、`image` 或 `row`；图片使用 `image_base64`。`row` 使用 `placements` 数组，每项指定 `type`（`text` 或 `qr`）、`slot` 和 `data`，可在同一行、同一次打印中混排文字和二维码。可选全局字段包括 `font`、`ecc`、`module_size`、`fit`、`threshold`、`speed`、`present_rows` 和 `return_rows`。未知字段会被拒绝。`print --json -` 输出机器可读结果；`physical_output_verified:false` 表示软件不能验证纸面可见效果。`send --json` 也可输出 JSON。
 
 ## 分层结构
 
