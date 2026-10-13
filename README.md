@@ -26,8 +26,8 @@ Use the single-cell interface for new integrations. The `/` separator is only us
 .venv/bin/python print_positions.py print qr --data "https://example.com/123" --slot 3
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
-.venv/bin/python print_positions.py feed 1
-.venv/bin/python print_positions.py back 1 --speed 1.5
+.venv/bin/python print_positions.py feed 1 --json
+.venv/bin/python print_positions.py back 1 --speed 1.5 --json
 ```
 
 - `--slot` selects a cell in the current row, from 1 to 8. It does not automatically find the next unused cell.
@@ -38,7 +38,9 @@ Use the single-cell interface for new integrations. The `/` separator is only us
 - QR codes use the printer's native TSPL `QRCODE` command with an `X60,J5` 60-dot area to request centering in the selected 5 × 5 mm cell. A short `Q1` job was accepted by the TE344, but visual alignment has not yet been confirmed. `--ecc` accepts `L/M/Q/H`, and `--module-size` sets module width in dots from 1 to 10. Defaults are `M` and `1`. The label severely limits QR capacity and readability; test the actual payload, printer, and scanner.
 - Single-cell text and QR payloads accept printable ASCII only, including JSON input. In this interface `/` is a literal character.
 - `status --json` queries status without moving the media. `capabilities` always emits JSON and does not connect to the printer.
-- `feed 0` and `back 0` succeed without connecting to the device or sending commands.
+- `feed/back --json` emit one JSON result on stdout and send diagnostics to stderr. A non-zero result confirms command submission and the final status only; `movement_confirmed_by_status:false` means the status response does not prove that media physically moved. Zero rows returns `moved:false` without opening the device.
+- Successful `print --json -` means the command was submitted and a printer `busy → ready` status cycle was observed. `physical_output_verified:false` means software cannot confirm visible marks on the media.
+- Standalone `feed` and `back` commands move exactly one row per invocation; repeat the command for additional rows.
 
 A GUI can send one JSON job on standard input:
 
@@ -144,31 +146,31 @@ Chinese font and encoding support is not configured. Use simple ASCII letters an
 ## 3. Forward motion: `feed`
 
 ```sh
-.venv/bin/python print_positions.py feed [ROWS] [--speed IPS]
+.venv/bin/python print_positions.py feed [1] [--speed IPS] [--json]
 ```
 
-`ROWS` is an optional integer from 0 to 119, defaulting to 1. Each row advances 84 dots (7 mm) without printing. `0` is a no-op and does not connect to the printer. `--speed` adjusts motion speed.
+The optional argument may only be `1`; each invocation advances exactly 84 dots (7 mm) without printing. Repeat the command to advance additional rows. `--speed` adjusts motion speed; `--json` emits a machine-readable result.
 
 ```sh
 .venv/bin/python print_positions.py feed
-.venv/bin/python print_positions.py feed 2
+.venv/bin/python print_positions.py feed 1
 ```
 
-The script sends `FEED ROWS×84`. TSPL's `FEED` argument is in dots, not label count; `ROWS` is the unit defined by this CLI.
+The script sends `FEED 84`. TSPL's `FEED` argument is in dots, not label count.
 
 ## 4. Reverse motion: `back`
 
 ```sh
-.venv/bin/python print_positions.py back [ROWS] [--speed IPS]
+.venv/bin/python print_positions.py back [1] [--speed IPS] [--json]
 ```
 
-`ROWS` is an optional integer from 0 to 119, defaulting to 1. `0` is a no-op and does not connect to the printer. `--speed` adjusts motion speed.
+The optional argument may only be `1`; each invocation reverses exactly 84 dots (7 mm). Repeat the command for additional rows. `--speed` adjusts motion speed; `--json` emits a machine-readable result.
 
 ```sh
 .venv/bin/python print_positions.py back
 ```
 
-The script sends `BACKFEED ROWS×84`. This is relative motion, not an undo operation: it does not erase printed content or guarantee alignment with an earlier row. Print jobs use `--return-rows` to request this motion explicitly. The accepted maximum of 119 rows is a protocol limit, not a safe reverse distance; keep return moves small and use a low speed when appropriate.
+The script sends `BACKFEED 84`. This is relative motion, not an undo operation: it does not erase printed content or guarantee alignment with an earlier row. Print jobs use `--return-rows` to request positioning separately. Keep reverse moves small and use a low speed when appropriate.
 
 **The numeric maximum is not a safe reverse distance.** Long reverse movements can loosen or wrinkle media or ribbon and cause jams. Use small steps only when reverse motion is needed and the paper path is healthy. Do not repeatedly reverse to recover from a fault.
 
@@ -187,10 +189,11 @@ This script does not parse command-line arguments. It opens the USB device and d
 ## 6. Logs and errors
 
 - `model reply: b'TE344'`: expected printer model received.
-- `TX ... bytes`: command bytes written, followed by the command text. This does not confirm a successful physical print.
+- `TX ... bytes`: bytes accepted by the local USB write call, followed by the command text. This does not confirm a successful physical print.
 - `status 0x00: normal`: printer reports normal status.
 - `status 0x20: printing`: printer is busy; this may also appear during paper motion and does not confirm text was printed.
-- `done`: the script completed its flow; it does not confirm alignment or print quality.
+- `command completed; paper movement is not confirmed by the status response`: the feed command was sent and a status was read, but that status does not prove physical movement.
+- `done` (print): a busy-to-ready status cycle was observed; this does not confirm visible output, alignment, or print quality.
 
 Recognized status codes:
 
@@ -217,7 +220,7 @@ Common errors:
 - `printer not ready: ...`: pre-job readiness check failed; no subsequent print or motion command was sent.
 - `printer error: ...`: an error was detected while waiting; part of the job may have run.
 - `printer did not run`: no complete busy-to-ready cycle was confirmed. The printer may still have moved; do not blindly retry.
-- `no reply`: no status response was received. The current post-motion check for `feed/back` may still print `done` without a response; this does not confirm successful movement.
+- `no reply`: no status response was received. `feed/back` now reports an error and unknown movement; inspect the stock before retrying.
 
 On `paper jam`, inspect the media, ribbon, and sensor position. Gap detection or positioning faults can also produce this status; the code alone does not prove a mechanical jam. The CLI has no fault-clear or reset command.
 

@@ -26,8 +26,8 @@ GUI 或其他 CLI 应使用单槽接口，不依赖旧接口的 `/` 分列约定
 .venv/bin/python print_positions.py print qr --data "https://example.com/123" --slot 3
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
-.venv/bin/python print_positions.py feed 1
-.venv/bin/python print_positions.py back 1 --speed 1.5
+.venv/bin/python print_positions.py feed 1 --json
+.venv/bin/python print_positions.py back 1 --speed 1.5 --json
 ```
 
 - `--slot` 是纸带当前一行中的目标位置，范围 1～8；不会自动寻找下一个空位。
@@ -38,7 +38,9 @@ GUI 或其他 CLI 应使用单槽接口，不依赖旧接口的 `/` 分列约定
 - 二维码使用打印机原生 TSPL `QRCODE` 指令，通过 `X60,J5` 请求在选定的 5 × 5 mm 标签格内居中。TE344 已接受短内容 `Q1` 的试印，但实物对位尚未目视确认。`--ecc` 可选 `L/M/Q/H`，`--module-size` 是模块宽度点数，范围 1～10，默认 1。标签尺寸对二维码容量和可扫描性有明显限制，调用方应先用实际设备和扫码器验证内容长度及模块尺寸。
 - 机器模式打印数据仅接受可打印 ASCII；文本可包含 `/`，它不再是分隔符。JSON 输入目前也只接受 ASCII 内容。
 - `status --json` 只查询状态，不执行走纸。`capabilities` 不连接打印机，始终输出 JSON。
-- `feed`/`back` 是显式走纸，`ROWS=0` 会直接成功且不连接设备。
+- `feed/back --json` 输出单行 JSON 结果，诊断日志写入 stderr。非零行结果只确认命令已发送及最后读到的状态；`movement_confirmed_by_status:false` 表示状态回复不能证明纸实际移动。`0` 行返回 `moved:false`，不连接设备。
+- `print --json -` 成功表示命令已发送且观察到打印机 `busy → ready` 状态周期；`physical_output_verified:false` 表示程序不能确认纸面上肉眼可见的字迹。
+- 独立 `feed`/`back` 每次只允许移动一行；多行必须拆成多次单行命令。
 
 GUI 可把一个 JSON 作业写入标准输入：
 
@@ -147,38 +149,40 @@ printf '%s' '{"type":"text","data":"A123","slot":3,"font":2,"present_rows":5,"re
 - 脚本不跟踪物理行号；调用方需根据上次作业的展示量显式传入 `--return-rows`。同一行不同格可分别提交作业，但展示进纸与回退的补偿关系仍待实机确认，验证前不要用于生产定位。
 - 当前普通打印不会发送 `GAPDETECT` 或 `HOME`，也不会自动修复失准的纸张定位。
 
+独立的 `feed` 和 `back` 命令每次只移动一行；需要多行时，重复执行单行命令。
+
 ## 3. 前进：feed
 
 ```sh
-.venv/bin/python print_positions.py feed [ROWS]
+.venv/bin/python print_positions.py feed [1] [--json]
 ```
 
-`ROWS` 为可选整数，默认 1，代码允许范围为 0～119。每行前进 84 点（7 mm），不打印文本。`0` 是不连接设备、不发送命令的空操作。可用 `--speed` 调整速度。
+可选参数只能是 `1`；每次命令只前进 84 点（7 mm），不打印文本。需要进多行时重复执行。可用 `--speed` 调整速度；`--json` 输出机器可读结果。
 
 ```sh
 # 前进 1 行
 .venv/bin/python print_positions.py feed
 
-# 前进 2 行，即 14 mm
-.venv/bin/python print_positions.py feed 2
+# 再单独前进 1 行
+.venv/bin/python print_positions.py feed 1
 ```
 
-实际发送 `FEED ROWS×84`。TSPL 的 `FEED` 参数单位是点，不是标签张数；命令行的 `ROWS` 才是本脚本定义的行数。
+实际发送 `FEED 84`。TSPL 的 `FEED` 参数单位是点，不是标签张数。
 
 ## 4. 回退：back
 
 ```sh
-.venv/bin/python print_positions.py back [ROWS]
+.venv/bin/python print_positions.py back [1] [--json]
 ```
 
-`ROWS` 为可选整数，默认 1，代码允许范围同样为 0～119。`0` 是不连接设备、不发送命令的空操作。可用 `--speed` 调整速度。
+可选参数只能是 `1`；每次命令只回退 84 点（7 mm）。需要退多行时重复执行。可用 `--speed` 调整速度；`--json` 输出机器可读结果。
 
 ```sh
 # 回退 1 行，即 7 mm
 .venv/bin/python print_positions.py back
 ```
 
-实际发送 `BACKFEED ROWS×84`。这是相对位移，不是“撤销上一次打印”，不会消除已经印出的文字，也不保证重新对齐之前的行。普通打印流程用 `--return-rows` 显式控制这段位移。119 行是协议/参数上限，不是安全回退距离；应保持回退步数尽量小，必要时降低速度。
+实际发送 `BACKFEED 84`。这是相对位移，不是“撤销上一次打印”，不会消除已经印出的文字，也不保证重新对齐之前的行。打印流程中的 `--return-rows` 是单独的定位参数。应保持回退步数尽量小，必要时降低速度。
 
 **允许的数值上限不是安全回退距离。** 长距离回退可能造成纸张或碳带松弛、褶皱、卡纸。只有纸路正常、确实需要回退时才小步操作；故障时不要靠反复回退复位。
 
@@ -205,10 +209,11 @@ printf '%s' '{"type":"text","data":"A123","slot":3,"font":2,"present_rows":5,"re
 ## 6. 日志和错误含义
 
 - `model reply: b'TE344'`：设备返回型号 TE344。
-- `TX ... bytes`：已写入的命令字节数，随后列出发送内容；不等于实物打印成功。
+- `TX ... bytes`：本机 USB 写调用接受的命令字节数，随后列出命令；不等于实物打印成功。
 - `status 0x00: normal`：设备报告正常。
 - `status 0x20: printing`：设备忙碌，走纸时也可能出现；不代表已印出文字。
-- `done`：脚本完成当前流程，不是纸张位置或印刷质量的实物验收。
+- `command completed; paper movement is not confirmed by the status response`：走纸命令已发送且读到状态，但状态回复不能证明纸实际移动。
+- `done`（打印）：脚本观察到忙→就绪状态周期；不确认肉眼可见输出、对位或印刷质量。
 
 当前脚本识别的其他状态：
 
@@ -233,7 +238,7 @@ printf '%s' '{"type":"text","data":"A123","slot":3,"font":2,"present_rows":5,"re
 - `printer not ready: ...`：作业前检查未通过，未发送后续打印/走纸命令。
 - `printer error: ...`：等待动作时检测到错误，作业可能已经部分执行。
 - `printer did not run`：等待期间未确认完整的忙碌到就绪周期；不一定代表设备完全没动，不要盲目重发。
-- `no reply`：没有收到状态回复。当前 `feed/back` 的动作后检查可能在无回复时仍输出 `done`，不能据此确认走纸成功。
+- `no reply`：没有收到状态回复。`feed/back` 会报告错误并说明位移未知；先检查纸张，不要盲目重发。
 
 出现 `paper jam` 时，先检查纸张、碳带和传感器位置。此状态也可能与间隙检测或定位失败有关，不能只凭状态码确定机械卡死。代码没有清错或复位命令。
 

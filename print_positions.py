@@ -326,7 +326,7 @@ def prepare(ep_out, ep_in):
 def move_rows(ep_out, ep_in, command, rows, speed=DEFAULT_SPEED):
     if rows == 0:
         print(f"{command}: no movement (0 rows)")
-        return
+        return {"command_sent": False, "status_code": None, "status": "no movement"}
     speed = validate_speed(speed)
     dots = rows * ROW_DOTS
     # CLS drops the previous image so a feed does not reprint it.
@@ -339,11 +339,15 @@ def move_rows(ep_out, ep_in, command, rows, speed=DEFAULT_SPEED):
         time.sleep(0.4 * rows + 0.4)
         code, name = status(ep_out, ep_in)
     print(f"status 0x{code:02x}: {name}" if code is not None else f"status: {name}")
+    if code is None:
+        sys.exit(f"{command} was sent, but the printer returned no status; movement is unknown")
     if code not in (0x00, None) and name not in ("normal", "printing"):
         sys.exit(f"{command} failed: {name}")
     if code == 0x20:
         sys.exit(f"{command} still moving")
-    print("done")
+    print("command completed; paper movement is not confirmed by the status response")
+    return {"command_sent": True, "status_code": code, "status": name,
+            "movement_confirmed": False}
 
 
 def wait_cycle(ep_out, ep_in, timeout=5.0):
@@ -359,11 +363,11 @@ def wait_cycle(ep_out, ep_in, timeout=5.0):
         if code == 0x20:
             saw_motion = True
         elif saw_motion and code == 0x00:
-            return
+            return {"cycle_observed": True, "final_status_code": code}
         elif code not in (None, 0x00, 0x20):
             sys.exit(f"printer error: {name}")
         time.sleep(0.05)
-    sys.exit("printer did not run")
+    sys.exit("no complete busy-to-ready cycle was observed; output may have occurred, do not retry blindly")
 
 
 def print_fields(ep_out, ep_in, text, font, pos, new_row,
@@ -442,14 +446,16 @@ def row_count(value):
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Print on the TE344 8-slot label row")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    feed = sub.add_parser("feed", help="advance rows, 7 mm each (0 is a no-op)")
-    feed.add_argument("rows", nargs="?", type=row_count, default=1)
+    feed = sub.add_parser("feed", help="advance exactly one row (7 mm)")
+    feed.add_argument("rows", nargs="?", type=int, choices=(1,), default=1)
     feed.add_argument("--speed", type=float, choices=SPEEDS, default=DEFAULT_SPEED,
                       help="paper motion speed in IPS")
-    back = sub.add_parser("back", help="reverse rows, 7 mm each (0 is a no-op)")
-    back.add_argument("rows", nargs="?", type=row_count, default=1)
+    feed.add_argument("--json", action="store_true", help="emit a JSON result")
+    back = sub.add_parser("back", help="reverse exactly one row (7 mm)")
+    back.add_argument("rows", nargs="?", type=int, choices=(1,), default=1)
     back.add_argument("--speed", type=float, choices=SPEEDS, default=DEFAULT_SPEED,
                       help="paper motion speed in IPS")
+    back.add_argument("--json", action="store_true", help="emit a JSON result")
     print_cmd = sub.add_parser("print", help="print text or a QR code on one slot")
     print_cmd.add_argument(
         "target", nargs="?", help="text, qr, or legacy slash-separated text"
@@ -525,12 +531,9 @@ def main():
                 return 2
             print(f"error: {exc}", file=sys.stderr)
             return 2
-    machine_output = args.cmd == "status" and args.json
+    machine_output = args.cmd in ("status", "feed", "back") and args.json
     if args.cmd == "print" and args.json is not None:
         machine_output = True
-    if args.cmd in ("feed", "back") and args.rows == 0:
-        print("no movement (0 rows)")
-        return 0
     try:
         dev, intf, ep_out, ep_in = open_printer()
     except SystemExit as exc:
@@ -566,11 +569,22 @@ def main():
                 emit_json({"ok": True, "device": "TE344", "type": kind,
                            "slot": slot, "data_length": len(value),
                            "present_rows": present_rows, "return_rows": return_rows,
-                           "speed_ips": speed})
+                           "speed_ips": speed, "command_sent": True,
+                           "printer_cycle_observed": True,
+                           "physical_output_verified": False})
             return 0
-        prepare(ep_out, ep_in)
-        move_rows(ep_out, ep_in, "FEED" if args.cmd == "feed" else "BACKFEED",
-                  args.rows, args.speed)
+        with contextlib.redirect_stdout(sys.stderr if machine_output else sys.stdout):
+            prepare(ep_out, ep_in)
+            motion = move_rows(ep_out, ep_in,
+                               "FEED" if args.cmd == "feed" else "BACKFEED",
+                               args.rows, args.speed)
+        if machine_output:
+            emit_json({"ok": True, "device": "TE344", "command": args.cmd.upper(),
+                       "rows": args.rows, "speed_ips": args.speed,
+                       "command_sent": motion["command_sent"],
+                       "status_code": motion["status_code"],
+                       "movement_confirmed_by_status": motion.get(
+                           "movement_confirmed", False)})
         return 0
     except SystemExit as exc:
         message = str(exc)

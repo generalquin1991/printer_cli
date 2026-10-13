@@ -92,15 +92,68 @@ class PrintJobTests(unittest.TestCase):
         write.assert_not_called()
         status.assert_not_called()
 
-    def test_cli_feed_zero_does_not_open_device(self):
-        output = StringIO()
+    def test_cli_rejects_multirow_feed_before_opening_device(self):
         with (
-            patch("sys.argv", ["print_positions.py", "feed", "0"]),
+            patch("sys.argv", ["print_positions.py", "feed", "3"]),
             patch.object(printer, "open_printer", side_effect=AssertionError("opened")),
+            patch("sys.stderr", new_callable=StringIO),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                printer.main()
+        self.assertEqual(exc.exception.code, 2)
+
+    def test_cli_rejects_multirow_back_before_opening_device(self):
+        with (
+            patch("sys.argv", ["print_positions.py", "back", "2"]),
+            patch.object(printer, "open_printer", side_effect=AssertionError("opened")),
+            patch("sys.stderr", new_callable=StringIO),
+        ):
+            with self.assertRaises(SystemExit) as exc:
+                printer.main()
+        self.assertEqual(exc.exception.code, 2)
+
+    def test_cli_motion_json_emits_only_result_on_stdout(self):
+        output = StringIO()
+        fake_dev = object()
+        fake_intf = type("Interface", (), {"bInterfaceNumber": 0})()
+        with (
+            patch("sys.argv", ["print_positions.py", "back", "1", "--speed", "2.5",
+                               "--json"]),
+            patch.object(printer, "open_printer", return_value=(fake_dev, fake_intf,
+                                                                  object(), object())),
+            patch.object(printer, "prepare"),
+            patch.object(printer, "move_rows", return_value={
+                "command_sent": True, "status_code": None,
+                "movement_confirmed": False,
+            }),
+            patch.object(printer.usb.util, "release_interface"),
+            patch.object(printer.usb.util, "dispose_resources"),
             redirect_stdout(output),
         ):
             self.assertEqual(printer.main(), 0)
-        self.assertIn("no movement", output.getvalue())
+        self.assertEqual(json.loads(output.getvalue()), {
+            "ok": True, "device": "TE344", "command": "BACK", "rows": 1,
+            "speed_ips": 2.5, "command_sent": True, "status_code": None,
+            "movement_confirmed_by_status": False,
+        })
+
+    def test_cli_motion_json_reports_printer_error(self):
+        output = StringIO()
+        fake_dev = object()
+        fake_intf = type("Interface", (), {"bInterfaceNumber": 0})()
+        with (
+            patch("sys.argv", ["print_positions.py", "feed", "1", "--json"]),
+            patch.object(printer, "open_printer", return_value=(fake_dev, fake_intf,
+                                                                  object(), object())),
+            patch.object(printer, "prepare", side_effect=SystemExit("printer not ready: pause")),
+            patch.object(printer.usb.util, "release_interface"),
+            patch.object(printer.usb.util, "dispose_resources"),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(printer.main(), 4)
+        self.assertEqual(json.loads(output.getvalue()), {
+            "ok": False, "error": "printer not ready: pause", "code": "printer_error",
+        })
 
     def test_motion_command_uses_selected_speed(self):
         with (
@@ -110,6 +163,24 @@ class PrintJobTests(unittest.TestCase):
         ):
             printer.move_rows(None, None, "FEED", 2, 2.5)
         self.assertIn(b"SPEED 2.5", write.call_args.args[1])
+
+    def test_motion_with_no_status_reply_is_not_reported_as_done(self):
+        with (
+            patch.object(printer, "write"),
+            patch.object(printer, "status", return_value=(None, "no reply")),
+            patch.object(printer.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(SystemExit, "movement is unknown"):
+                printer.move_rows(None, None, "FEED", 1)
+
+    def test_busy_to_ready_cycle_is_explicitly_reported(self):
+        with (
+            patch.object(printer, "status", side_effect=[(0x20, "printing"),
+                                                          (0x00, "normal")]),
+            patch.object(printer.time, "sleep"),
+        ):
+            result = printer.wait_cycle(None, None)
+        self.assertEqual(result, {"cycle_observed": True, "final_status_code": 0})
 
     def test_json_speed_and_explicit_same_row_return(self):
         job = printer.json_job(
