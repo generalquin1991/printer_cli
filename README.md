@@ -8,13 +8,15 @@ This guide documents the command-line interfaces in `print_positions.py` and `pr
 
 Run commands from the project directory with the existing `.venv/bin/python` environment. The scripts require PyUSB and a working USB backend. They communicate directly with the printer over USB, not through the operating system print queue.
 
-The current media configuration is fixed:
+The default media profile is `media.default.json`. Pass `--media-config PATH` to a print, feed, back, or capabilities command to select another JSON profile. The profile defines resolution, dots/mm, column count, label width/height, horizontal column gap, and vertical row gap. Defaults are:
 
 - Printer: TE344, USB VID:PID `1203:0273`.
 - Resolution: 300 DPI, using 12 dots/mm.
 - Eight cells per row; each label is 5 × 5 mm, with 2 mm column and row gaps.
 - Full-row print area: 54 mm wide × 5 mm high.
 - Row pitch: 7 mm (84 dots), including the gap.
+
+Custom profiles must provide all fields from the default file. `capabilities --media-config PATH` validates a profile and reports its derived media width and row pitch.
 
 ## Commands for GUI and CLI integrations
 
@@ -28,6 +30,8 @@ Use the single-cell interface for new integrations. The `/` separator is only us
   --data Q1 --data Q2 --data Q3 --data Q4 \
   --data Q5 --data Q6 --data Q7 --data Q8 \
   --slot 1 --module-size 1 --present-rows 0
+.venv/bin/python print_positions.py print image --file ./logo.png --slot 1 --present-rows 0
+base64 < ./logo.png | .venv/bin/python print_positions.py print image --base64-stdin --slot 1 --fit contain
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
 .venv/bin/python print_positions.py feed 1 --json
@@ -40,6 +44,8 @@ Use the single-cell interface for new integrations. The `/` separator is only us
 - `--speed` sets print and paper-motion speed in IPS. Supported values are `1, 1.5, 2, 2.5, 3, 3.5, 4, 5`; default: `1.5`. Standalone `feed` and `back` commands also accept it.
 - `--font` selects built-in font 1 to 5; default: `2`. Single-cell text that exceeds the 5 × 5 mm label boundary is rejected.
 - `print qr` uses the printer's native TSPL `QRCODE` command. Repeat `--data` to place up to eight codes in consecutive cells starting at `--slot`; the row is sent as one print job. `--ecc` accepts `L/M/Q/H`; `--module-size` is the module width in dots (1–10, default 1). A `Q1`–`Q8` row was visibly printed on the TE344, but scan reliability and optical centering have not been verified. Test short payloads with the intended scanner.
+- `print image` accepts either `--file PATH` or `--base64-stdin` and converts the image to a monochrome TSPL `BITMAP` in one `--slot`. It supports formats Pillow can decode. `--fit contain` preserves aspect ratio and centers with white padding; `stretch` fills the label. `--threshold` sets the grayscale cutoff (0–255). Install dependencies from `requirements.txt`. Inputs are limited to 30 MB and 20 megapixels after decoding.
+- `--media-config` is accepted by `print`, `feed`, `back`, and `capabilities`. Geometry in `media.default.json` drives coordinates, TSPL `SIZE/GAP`, and feed/back dot distances. The default TE344 values preserve the existing measured setup.
 - Single-cell text and QR payloads accept printable ASCII only, including JSON input. In this interface `/` is a literal character.
 - `status --json` queries status without moving the media. `capabilities` always emits JSON and does not connect to the printer.
 - `feed/back --json` emit one JSON result on stdout and send diagnostics to stderr. A non-zero result confirms command submission and the final status only; `movement_confirmed_by_status:false` means the status response does not prove that media physically moved. Zero rows returns `moved:false` without opening the device.
@@ -230,7 +236,7 @@ On `paper jam`, inspect the media, ribbon, and sensor position. Gap detection or
 
 ## 7. Commands not yet available
 
-The CLI provides `print`, `status`, `capabilities`, `feed`, and `back`. It does not provide calibration, reset, job cancellation, copy count, Chinese printing, automatic unused-slot selection, or configurable media dimensions.
+The CLI provides `print text/qr/image`, `status`, `capabilities`, `feed`, and `back`. It does not provide calibration, reset, job cancellation, copy count, Chinese printing, or automatic unused-slot selection.
 
 Fixed print settings include `OFFSET 0 mm`, `LIMITFEED 20 mm`, tear-off/peel/cutter disabled, `DIRECTION 1`, `REFERENCE 0,0`, `SHIFT 0`, and `DENSITY 12`. `SPEED` is set by `--speed` or JSON `speed`, defaulting to 1.5 IPS.
 

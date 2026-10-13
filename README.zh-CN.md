@@ -4,17 +4,19 @@
 
 本文对应当前项目的 `print_positions.py` 和 `probe_te344.py`，列出这两个脚本的全部命令行入口，不是打印机完整 TSPL 指令手册。
 
-## 使用前提与纸张配置
+## 使用前提与介质配置
 
 在项目目录运行以下命令，使用已有虚拟环境 `.venv/bin/python`。脚本依赖 PyUSB 和可用的 USB 后端，通过 USB 直接连接打印机，不通过系统打印队列。
 
-当前配置固定为：
+默认配置保存在 `media.default.json`，可通过每个打印/走纸命令的 `--media-config PATH` 替换。字段包含打印分辨率、dots/mm、列数、标签宽高、横向列间距和纵向行间距。当前默认值为：
 
 - 设备：TE344，USB VID:PID 为 `1203:0273`。
 - 分辨率：300 DPI，按 12 dots/mm 换算。
 - 每行 8 列；每个标签按 5 × 5 mm 计算，列间距和行间隙均为 2 mm。
 - 整行打印区域宽 54 mm、高 5 mm。
 - 一行纸张节距为 7 mm，即 84 点；不是 5 mm。
+
+自定义 JSON 必须包含与默认配置相同的全部字段；`capabilities --media-config PATH` 可检查并查看计算后的整行宽度与行节距。
 
 ## 面向程序的命令
 
@@ -28,6 +30,8 @@ GUI 或其他 CLI 应使用单槽接口，不依赖旧接口的 `/` 分列约定
   --data Q1 --data Q2 --data Q3 --data Q4 \
   --data Q5 --data Q6 --data Q7 --data Q8 \
   --slot 1 --module-size 1 --present-rows 0
+.venv/bin/python print_positions.py print image --file ./logo.png --slot 1 --present-rows 0
+base64 < ./logo.png | .venv/bin/python print_positions.py print image --base64-stdin --slot 1 --fit contain
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
 .venv/bin/python print_positions.py feed 1 --json
@@ -40,6 +44,8 @@ GUI 或其他 CLI 应使用单槽接口，不依赖旧接口的 `/` 分列约定
 - `--speed` 设置打印和进退纸速度，单位 IPS，支持 `1, 1.5, 2, 2.5, 3, 3.5, 4, 5`，默认 `1.5`。独立 `feed`/`back` 也支持 `--speed`。
 - `--font` 取内置字体编号 1～5，默认 2。字符内容超过 5 × 5 mm 标签边界时拒绝发送。
 - `print qr` 使用打印机原生 TSPL `QRCODE` 指令。重复传入 `--data` 可从 `--slot` 起连续打印最多 8 个码，并作为一个作业发送。`--ecc` 可选 `L/M/Q/H`；`--module-size` 是模块宽度点数，范围 1～10，默认 1。TE344 已实物打印出 `Q1`～`Q8` 一整行，但扫码可靠性和视觉居中尚未验证，应使用目标扫码器检查短内容。
+- `print image` 接受 `--file PATH` 或 `--base64-stdin`（二选一），将图像转换为单色 TSPL `BITMAP`，打印到一个 `--slot`。支持 Pillow 可解码的图片；`--fit contain` 保持比例并留白居中，`stretch` 拉伸铺满标签，`--threshold` 设置黑白阈值（0～255）。需先安装 `requirements.txt` 中依赖。图像输入最多 30 MB，解码尺寸最多 20 MP。
+- `--media-config` 可传给 `print`、`feed`、`back` 和 `capabilities`。几何字段定义见 `media.default.json`；feed/back 点数、文字/二维码坐标和 TSPL `SIZE/GAP` 均从该 profile 计算。默认 TE344 参数仍沿用既有实测值。
 - 机器模式打印数据仅接受可打印 ASCII；文本可包含 `/`，它不再是分隔符。JSON 输入目前也只接受 ASCII 内容。
 - `status --json` 只查询状态，不执行走纸。`capabilities` 不连接打印机，始终输出 JSON。
 - `feed/back --json` 输出单行 JSON 结果，诊断日志写入 stderr。非零行结果只确认命令已发送及最后读到的状态；`movement_confirmed_by_status:false` 表示状态回复不能证明纸实际移动。`0` 行返回 `moved:false`，不连接设备。
@@ -248,7 +254,7 @@ printf '%s' '{"type":"text","data":"A123","slot":3,"font":2,"present_rows":5,"re
 
 ## 7. 尚未提供的命令
 
-当前提供 `print`、`status`、`capabilities`、`feed`、`back`。尚未提供 `calibrate`、`reset`、取消作业、份数、中文打印、自动选择下一个空槽或参数化纸张尺寸命令。
+当前提供 `print text/qr/image`、`status`、`capabilities`、`feed`、`back`。尚未提供 `calibrate`、`reset`、取消作业、份数、中文打印或自动选择下一个空槽。
 
 打印时固定发送的设置包含 `OFFSET 0 mm`、`LIMITFEED 20 mm`、关闭撕纸/剥离/切刀、`DIRECTION 1`、`REFERENCE 0,0`、`SHIFT 0` 和 `DENSITY 12`；`SPEED` 由 `--speed` 或 JSON `speed` 设置，默认 1.5 IPS。
 

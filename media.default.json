@@ -1,0 +1,10 @@
+{
+  "name": "TE344-8x5mm-2mm-gap",
+  "resolution_dpi": 300,
+  "dots_per_mm": 12,
+  "columns": 8,
+  "label_width_mm": 5,
+  "label_height_mm": 5,
+  "column_gap_mm": 2,
+  "row_gap_mm": 2
+}

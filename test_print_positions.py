@@ -1,6 +1,10 @@
 import json
+import base64
+import importlib.util
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -59,6 +63,54 @@ class PrintJobTests(unittest.TestCase):
     def test_qr_row_rejects_payloads_that_pass_the_last_slot(self):
         with self.assertRaisesRegex(ValueError, "remaining slots"):
             printer.make_print_job("qr", ["A", "B", "C", "D", "E"], 5)
+
+    def test_custom_media_profile_drives_coordinates_and_tspl_size(self):
+        media = printer.MediaProfile("custom", 300, 12, 4, 8, 6, 1, 3)
+        job = printer.make_print_job("text", "A", 2, media=media)
+        self.assertIn("SIZE 35 mm, 6 mm", job)
+        self.assertIn("GAP 3 mm, 0 mm", job)
+        self.assertIn('TEXT 150,26,"2"', job)
+        self.assertEqual(media.row_pitch_dots, 108)
+
+    def test_media_profile_file_validation(self):
+        profile = {
+            "name": "test", "resolution_dpi": 300, "dots_per_mm": 12,
+            "columns": 8, "label_width_mm": 5, "label_height_mm": 5,
+            "column_gap_mm": 2, "row_gap_mm": 2,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "media.json"
+            path.write_text(json.dumps(profile), encoding="utf-8")
+            self.assertEqual(printer.load_media_profile(path).media_width_mm, 54)
+            profile["extra"] = 1
+            path.write_text(json.dumps(profile), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly"):
+                printer.load_media_profile(path)
+
+    def test_image_cli_reads_base64_stdin(self):
+        args = printer.parse_args([
+            "print", "image", "--base64-stdin", "--slot", "3"
+        ])
+        class FakeStdin:
+            buffer = BytesIO(base64.b64encode(b"image bytes"))
+        with patch.object(printer.sys, "stdin", FakeStdin()):
+            job = printer.execute_print(args)
+        self.assertEqual(job[:3], ("image", b"image bytes", 3))
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is not installed")
+    def test_image_job_contains_binary_bitmap_and_configured_geometry(self):
+        from PIL import Image
+        image_data = BytesIO()
+        Image.new("RGB", (1, 1), "black").save(image_data, format="PNG")
+        media = printer.MediaProfile("tiny", 300, 12, 2, 5, 5, 1, 2)
+        job = printer.make_image_job(image_data.getvalue(), 2, media=media)
+        self.assertTrue(job.startswith(b"SIZE 11 mm, 5 mm\r\n"))
+        marker = b"BITMAP 70,0,8,60,0,"
+        offset = job.index(marker) + len(marker)
+        self.assertEqual(len(job), offset + 480 + len(b"\r\nPRINT 1,1\r\n"))
+        bitmap = job[offset:offset + 480]
+        self.assertEqual(bitmap[29 * 8 + 29 // 8] & (1 << (7 - 29 % 8)), 0)
+        self.assertTrue(job.endswith(b"\r\nPRINT 1,1\r\n"))
 
     def test_cli_accepts_repeated_data_for_qr_cells(self):
         args = printer.parse_args([
@@ -254,7 +306,7 @@ class PrintJobTests(unittest.TestCase):
                                 1, 1.5, 2)
         self.assertEqual(calls, [("write",), ("move", "BACKFEED", 2),
                                  ("write",), ("wait",), ("move", "FEED", 1)])
-        self.assertEqual(make_job.call_args.args[-1], 1.5)
+        self.assertEqual(make_job.call_args.args[-2], 1.5)
 
     def test_status_json_is_machine_readable(self):
         output = StringIO()
