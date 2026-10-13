@@ -24,6 +24,10 @@ GUI 或其他 CLI 应使用单槽接口，不依赖旧接口的 `/` 分列约定
 .venv/bin/python print_positions.py print text --data "A123" --slot 3 --font 2 --present-rows 5 --return-rows 0 --speed 1.5
 .venv/bin/python print_positions.py print text --data "B456" --slot 4 --font 2 --present-rows 5 --return-rows 6 --speed 1.5
 .venv/bin/python print_positions.py print qr --data "https://example.com/123" --slot 3
+.venv/bin/python print_positions.py print qr \
+  --data Q1 --data Q2 --data Q3 --data Q4 \
+  --data Q5 --data Q6 --data Q7 --data Q8 \
+  --slot 1 --module-size 1 --present-rows 0
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
 .venv/bin/python print_positions.py feed 1 --json
@@ -35,7 +39,7 @@ GUI 或其他 CLI 应使用单槽接口，不依赖旧接口的 `/` 分列约定
 - `--return-rows N` 默认 `0`，范围 `0..119`：打印前回退 N 行。当前尚未实机验证的同行定位估算为：首次打印传 `0`；之后传“上一作业的 `present_rows + 1`”。例如上一作业展示进纸 `5` 行，则估算下一作业回退 `6` 行。这个估算假定打印本身前进一行，依赖实机验证。
 - `--speed` 设置打印和进退纸速度，单位 IPS，支持 `1, 1.5, 2, 2.5, 3, 3.5, 4, 5`，默认 `1.5`。独立 `feed`/`back` 也支持 `--speed`。
 - `--font` 取内置字体编号 1～5，默认 2。字符内容超过 5 × 5 mm 标签边界时拒绝发送。
-- 二维码使用打印机原生 TSPL `QRCODE` 指令，通过 `X60,J5` 请求在选定的 5 × 5 mm 标签格内居中。TE344 已接受短内容 `Q1` 的试印，但实物对位尚未目视确认。`--ecc` 可选 `L/M/Q/H`，`--module-size` 是模块宽度点数，范围 1～10，默认 1。标签尺寸对二维码容量和可扫描性有明显限制，调用方应先用实际设备和扫码器验证内容长度及模块尺寸。
+- `print qr` 使用打印机原生 TSPL `QRCODE` 指令。重复传入 `--data` 可从 `--slot` 起连续打印最多 8 个码，并作为一个作业发送。`--ecc` 可选 `L/M/Q/H`；`--module-size` 是模块宽度点数，范围 1～10，默认 1。TE344 已实物打印出 `Q1`～`Q8` 一整行，但扫码可靠性和视觉居中尚未验证，应使用目标扫码器检查短内容。
 - 机器模式打印数据仅接受可打印 ASCII；文本可包含 `/`，它不再是分隔符。JSON 输入目前也只接受 ASCII 内容。
 - `status --json` 只查询状态，不执行走纸。`capabilities` 不连接打印机，始终输出 JSON。
 - `feed/back --json` 输出单行 JSON 结果，诊断日志写入 stderr。非零行结果只确认命令已发送及最后读到的状态；`movement_confirmed_by_status:false` 表示状态回复不能证明纸实际移动。`0` 行返回 `moved:false`，不连接设备。
@@ -61,7 +65,7 @@ printf '%s' '{"type":"text","data":"A123","slot":3,"font":2,"present_rows":5,"re
 
 打印和走纸命令会连接打印机、查询型号并检查就绪状态。`status` 只查询状态；`capabilities` 和帮助命令不连接设备。设备未就绪时，打印和走纸会停止。
 
-**实机记录（2026-10-12）：先前长距离进退后曾报告 `0x02: paper jam`；手工收紧碳带并按 Feed/Pause 键后恢复就绪。`SET TEAR ON` 加单行回退的试印未能回到目标行。短内容 `Q1` 使用 `X60,J5` 和 `present_rows=5` 的试印已完成，打印机恢复 `normal`，但实物对位尚未确认；此前字符/二维码位置被反馈仍不理想。同一行定位估算 `return_rows = 上一作业的 present_rows + 1`（默认展示 5 行时回退 6 行）尚未通过实物对位验证，暂不要用于生产。**
+**实机记录（2026-10-13）：TE344 已通过单个作业可见打印出 `Q1`～`Q8` 一整行；扫码可靠性和视觉居中尚未确认。此前长距离进退曾报告 `0x02: paper jam`，手工收紧碳带并按 Feed/Pause 后恢复就绪；`SET TEAR ON` 加单行回退未能回到目标行。`return_rows = 上一作业的 present_rows + 1` 估算仍未通过实物对位验证，不要用于生产定位。**
 
 ## 1. 查看帮助
 

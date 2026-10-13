@@ -24,6 +24,10 @@ Use the single-cell interface for new integrations. The `/` separator is only us
 .venv/bin/python print_positions.py print text --data "A123" --slot 3 --font 2 --present-rows 5 --return-rows 0 --speed 1.5
 .venv/bin/python print_positions.py print text --data "B456" --slot 4 --font 2 --present-rows 5 --return-rows 6 --speed 1.5
 .venv/bin/python print_positions.py print qr --data "https://example.com/123" --slot 3
+.venv/bin/python print_positions.py print qr \
+  --data Q1 --data Q2 --data Q3 --data Q4 \
+  --data Q5 --data Q6 --data Q7 --data Q8 \
+  --slot 1 --module-size 1 --present-rows 0
 .venv/bin/python print_positions.py status --json
 .venv/bin/python print_positions.py capabilities
 .venv/bin/python print_positions.py feed 1 --json
@@ -35,7 +39,7 @@ Use the single-cell interface for new integrations. The `/` separator is only us
 - `--return-rows N` controls reverse motion before printing, from `0` to `119`. Default: `0`. The current, unverified positioning estimate uses `0` for the first print and `previous present_rows + 1` to target another cell in that row. For example, after a job with `present_rows=5`, it estimates `return_rows=6`. This assumes one row of print motion plus the previous presentation motion; validate on the actual printer before relying on it.
 - `--speed` sets print and paper-motion speed in IPS. Supported values are `1, 1.5, 2, 2.5, 3, 3.5, 4, 5`; default: `1.5`. Standalone `feed` and `back` commands also accept it.
 - `--font` selects built-in font 1 to 5; default: `2`. Single-cell text that exceeds the 5 × 5 mm label boundary is rejected.
-- QR codes use the printer's native TSPL `QRCODE` command with an `X60,J5` 60-dot area to request centering in the selected 5 × 5 mm cell. A short `Q1` job was accepted by the TE344, but visual alignment has not yet been confirmed. `--ecc` accepts `L/M/Q/H`, and `--module-size` sets module width in dots from 1 to 10. Defaults are `M` and `1`. The label severely limits QR capacity and readability; test the actual payload, printer, and scanner.
+- `print qr` uses the printer's native TSPL `QRCODE` command. Repeat `--data` to place up to eight codes in consecutive cells starting at `--slot`; the row is sent as one print job. `--ecc` accepts `L/M/Q/H`; `--module-size` is the module width in dots (1–10, default 1). A `Q1`–`Q8` row was visibly printed on the TE344, but scan reliability and optical centering have not been verified. Test short payloads with the intended scanner.
 - Single-cell text and QR payloads accept printable ASCII only, including JSON input. In this interface `/` is a literal character.
 - `status --json` queries status without moving the media. `capabilities` always emits JSON and does not connect to the printer.
 - `feed/back --json` emit one JSON result on stdout and send diagnostics to stderr. A non-zero result confirms command submission and the final status only; `movement_confirmed_by_status:false` means the status response does not prove that media physically moved. Zero rows returns `moved:false` without opening the device.
@@ -61,7 +65,7 @@ The legacy `print TEXT --size N --pos N` interface remains available for existin
 
 Print and paper-motion commands check the printer model and readiness first. `status` only queries status; `capabilities` and help commands do not connect to the device. Print and motion stop if the printer is not ready.
 
-**Hardware test record (2026-10-12):** A previous long forward/reverse test reported `0x02: paper jam`. Manually tightening the ribbon and pressing Feed/Pause restored readiness. A test with `SET TEAR ON` and a one-row return did not reach the intended row. A short `Q1` QR job using `X60,J5` and `present_rows=5` completed and the printer returned to `normal`, but visual alignment has not been confirmed; earlier text/QR placement was reported as off. The same-row estimate `return_rows = previous present_rows + 1` (6 with the default presentation) has not passed physical alignment testing. Do not use same-row positioning in production yet.
+**Hardware test record (2026-10-13):** A `Q1`–`Q8` QR row printed visibly as a single job on the TE344. Scan reliability and optical centering remain unverified. Earlier, a long feed/backfeed test reported `0x02: paper jam`; manually tightening the ribbon and pressing Feed/Pause restored readiness. A `SET TEAR ON` test with a one-row return did not reach the intended row. The estimate `return_rows = previous present_rows + 1` has not passed physical alignment testing; do not rely on same-row positioning in production.
 
 ## 1. Help
 

@@ -200,7 +200,7 @@ def qr_command(value, slot, ecc=QR_ECC, module_dots=QR_MODULE_DOTS):
         raise ValueError("QR module size must be 1..10 dots")
     x = (slot - 1) * PITCH + CELL // 2
     y = CELL // 2
-    # J5 centers the printer-generated symbol inside a one-cell square area.
+    # The TE344 needs a cell-center anchor with the X/J alignment options to print visibly.
     return (f'QRCODE {x},{y},{ecc},{module_dots},A,0,'
             f'X{CELL},J5,M2,S7,"{value}"\r\n')
 
@@ -211,7 +211,12 @@ def make_print_job(kind, value, slot, font=DEFAULT_FONT, ecc=QR_ECC,
     if kind == "text":
         content = text_command(value, slot, font)
     elif kind == "qr":
-        content = qr_command(value, slot, ecc, module_dots)
+        values = value if isinstance(value, list) else [value]
+        if (not values or len(values) > COLUMNS
+                or slot + len(values) - 1 > COLUMNS):
+            raise ValueError("QR data count must fit in the remaining slots of the row")
+        content = "".join(qr_command(item, slot + index, ecc, module_dots)
+                          for index, item in enumerate(values))
     else:
         raise ValueError("type must be text or qr")
     width_mm = COLUMNS * LABEL_MM + (COLUMNS - 1) * GAP_MM
@@ -460,7 +465,8 @@ def parse_args(argv):
     print_cmd.add_argument(
         "target", nargs="?", help="text, qr, or legacy slash-separated text"
     )
-    print_cmd.add_argument("--data", help="text or QR payload for text/qr mode")
+    print_cmd.add_argument("--data", action="append",
+                           help="text or QR payload; repeat for multiple QR cells in one row")
     print_cmd.add_argument("--slot", type=int, help="target slot, 1-8")
     print_cmd.add_argument("--font", "--size", dest="font", type=int,
                            choices=(1, 2, 3, 4, 5), default=DEFAULT_FONT)
@@ -498,9 +504,15 @@ def execute_print(args):
             raise ValueError("--data is required for print text/qr")
         if args.slot is None:
             raise ValueError("--slot is required for print text/qr")
+        if args.target == "text":
+            if len(args.data) != 1:
+                raise ValueError("print text accepts exactly one --data value")
+            value = args.data[0]
+        else:
+            value = args.data
         if args.next:
             raise ValueError("--next is obsolete; use --return-rows to select a physical row")
-        return (args.target, args.data, args.slot, args.font, args.ecc,
+        return (args.target, value, args.slot, args.font, args.ecc,
                 args.module_size, args.present_rows, args.return_rows, args.speed)
     if args.target is None:
         raise ValueError("provide text, qr, or --json -")

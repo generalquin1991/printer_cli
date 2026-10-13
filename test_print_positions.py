@@ -47,6 +47,33 @@ class PrintJobTests(unittest.TestCase):
             command,
         )
 
+    def test_qr_row_generates_eight_codes_in_one_print_job(self):
+        command = printer.make_print_job(
+            "qr", [f"Q{i}" for i in range(1, 9)], 1, module_dots=1
+        )
+        self.assertEqual(command.count("QRCODE "), 8)
+        self.assertEqual(command.count("PRINT 1,1"), 1)
+        self.assertIn('QRCODE 30,30,M,1,A,0,X60,J5,M2,S7,"Q1"', command)
+        self.assertIn('QRCODE 618,30,M,1,A,0,X60,J5,M2,S7,"Q8"', command)
+
+    def test_qr_row_rejects_payloads_that_pass_the_last_slot(self):
+        with self.assertRaisesRegex(ValueError, "remaining slots"):
+            printer.make_print_job("qr", ["A", "B", "C", "D", "E"], 5)
+
+    def test_cli_accepts_repeated_data_for_qr_cells(self):
+        args = printer.parse_args([
+            "print", "qr", "--data", "Q1", "--data", "Q2", "--slot", "1"
+        ])
+        self.assertEqual(printer.execute_print(args)[:3],
+                         ("qr", ["Q1", "Q2"], 1))
+
+    def test_cli_rejects_repeated_text_data(self):
+        args = printer.parse_args([
+            "print", "text", "--data", "A", "--data", "B", "--slot", "1"
+        ])
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            printer.execute_print(args)
+
     def test_json_job_defaults_and_validation(self):
         job = printer.json_job('{"type":"text","data":"OK","slot":8}')
         self.assertEqual(job, ("text", "OK", 8, 2, "M", 1, 5, 0, 1.5))
