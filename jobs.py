@@ -17,3 +17,4 @@ class PrintRequest:
     present_rows: int = 5
     return_rows: int = 0
     speed: float = 1.5
+    fit: str = "contain"

@@ -2,7 +2,7 @@
 
 from PIL import Image
 
-from content import RasterContent
+from content import RasterContent, TextContent, generate_text
 from media import MediaProfile
 
 
@@ -22,7 +22,7 @@ def fit_to_cell(content, media, fit="contain"):
     return source.resize(cell_size, Image.Resampling.NEAREST)
 
 
-def render_row(items_by_slot, media):
+def render_row(items_by_slot, media, fit="contain"):
     if not isinstance(media, MediaProfile):
         raise TypeError("media must be MediaProfile")
     width = (media.columns - 1) * media.column_pitch_dots + media.cell_width_dots
@@ -30,7 +30,19 @@ def render_row(items_by_slot, media):
     for slot, content in items_by_slot.items():
         if isinstance(slot, bool) or not isinstance(slot, int) or not 1 <= slot <= media.columns:
             raise ValueError(f"slot must be 1..{media.columns}")
-        cell = fit_to_cell(content, media)
+        if isinstance(content, TextContent):
+            content = generate_text(content.text, content.font)
+            if (content.image.width > media.cell_width_dots
+                    or content.image.height > media.cell_height_dots):
+                raise ValueError("text does not fit inside the configured label")
+        if not isinstance(content, RasterContent):
+            raise TypeError("slot content must be TextContent or RasterContent")
+        if content.kind == "text":
+            cell = Image.new("1", (media.cell_width_dots, media.cell_height_dots), 1)
+            cell.paste(content.image, ((media.cell_width_dots - content.image.width) // 2,
+                                       (media.cell_height_dots - content.image.height) // 2))
+        else:
+            cell = fit_to_cell(content, media, fit)
         x = (slot - 1) * media.column_pitch_dots
         row.paste(cell, (x, 0))
     return row

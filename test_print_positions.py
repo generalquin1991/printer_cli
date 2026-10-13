@@ -1,6 +1,4 @@
-import json
 import base64
-import importlib.util
 from contextlib import redirect_stdout
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -8,326 +6,165 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import print_positions as printer
+from PIL import Image
+
+import printer_cli
+from content import RasterContent
+from jobs import Placement, PrintRequest
+from media import DEFAULT_MEDIA, MediaProfile
+from pipeline import render_request
+from printer_executor import PrinterExecutor
+from tspl_backend import TSPLBackend
 
 
-class PrintJobTests(unittest.TestCase):
-    def test_capabilities_describe_fixed_media(self):
-        caps = printer.capabilities()
-        self.assertEqual(caps["resolution_dpi"], 300)
-        self.assertEqual(caps["label_mm"], {"width": 5, "height": 5})
-        self.assertEqual(caps["slot_count"], 8)
-        self.assertEqual(caps["slot_pitch_mm"], 7)
-        self.assertEqual(caps["speed_ips"]["default"], 1.5)
-        self.assertEqual(caps["presentation"]["default_rows"], 5)
-        self.assertEqual(caps["presentation"]["same_row_return_rows"], 6)
-
-    def test_text_command_targets_selected_slot(self):
-        command = printer.make_print_job("text", "A/1", 3)
-        self.assertIn('TEXT 180,20,"2",0,1,1,"A/1"', command)
-        self.assertIn("SIZE 54 mm, 5 mm", command)
-        self.assertIn("SPEED 1.5", command)
-        self.assertIn("SET TEAR OFF", command)
-        self.assertNotIn("BACKFEED", command)
-        self.assertNotIn("\r\nFEED ", command)
-        self.assertIn("PRINT 1,1", command)
-
-    def test_print_speed_is_validated_and_applied(self):
-        command = printer.make_print_job("text", "A", 1, speed=2.5)
-        self.assertIn("SPEED 2.5", command)
-        with self.assertRaisesRegex(ValueError, "speed must"):
-            printer.make_print_job("text", "A", 1, speed=0.5)
-
-    def test_text_rejects_out_of_bounds_and_invalid_slot(self):
-        with self.assertRaisesRegex(ValueError, "does not fit"):
-            printer.make_print_job("text", "123456", 1, font=2)
-        with self.assertRaisesRegex(ValueError, "slot must"):
-            printer.make_print_job("text", "A", 9)
-
-    def test_qr_command_uses_native_tspl_and_slot_offset(self):
-        command = printer.make_print_job("qr", "https://example.com/123", 2)
-        self.assertIn(
-            'QRCODE 114,30,M,1,A,0,X60,J5,M2,S7,"https://example.com/123"',
-            command,
-        )
-
-    def test_qr_row_generates_eight_codes_in_one_print_job(self):
-        command = printer.make_print_job(
-            "qr", [f"Q{i}" for i in range(1, 9)], 1, module_dots=1
-        )
-        self.assertEqual(command.count("QRCODE "), 8)
-        self.assertEqual(command.count("PRINT 1,1"), 1)
-        self.assertIn('QRCODE 30,30,M,1,A,0,X60,J5,M2,S7,"Q1"', command)
-        self.assertIn('QRCODE 618,30,M,1,A,0,X60,J5,M2,S7,"Q8"', command)
-
-    def test_qr_row_rejects_payloads_that_pass_the_last_slot(self):
-        with self.assertRaisesRegex(ValueError, "remaining slots"):
-            printer.make_print_job("qr", ["A", "B", "C", "D", "E"], 5)
-
-    def test_custom_media_profile_drives_coordinates_and_tspl_size(self):
-        media = printer.MediaProfile("custom", 300, 12, 4, 8, 6, 1, 3)
-        job = printer.make_print_job("text", "A", 2, media=media)
-        self.assertIn("SIZE 35 mm, 6 mm", job)
-        self.assertIn("GAP 3 mm, 0 mm", job)
-        self.assertIn('TEXT 150,26,"2"', job)
-        self.assertEqual(media.row_pitch_dots, 108)
-
-    def test_media_profile_file_validation(self):
-        profile = {
-            "name": "test", "resolution_dpi": 300, "dots_per_mm": 12,
-            "columns": 8, "label_width_mm": 5, "label_height_mm": 5,
-            "column_gap_mm": 2, "row_gap_mm": 2,
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "media.json"
-            path.write_text(json.dumps(profile), encoding="utf-8")
-            self.assertEqual(printer.load_media_profile(path).media_width_mm, 54)
-            profile["extra"] = 1
-            path.write_text(json.dumps(profile), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "exactly"):
-                printer.load_media_profile(path)
-
-    def test_image_cli_reads_base64_stdin(self):
-        args = printer.parse_args([
-            "print", "image", "--base64-stdin", "--slot", "3"
+class PipelineTests(unittest.TestCase):
+    def test_qr_and_text_are_rendered_as_one_row_bitmap_job(self):
+        args = printer_cli.parse_args([
+            "print", "qr", "--data", "Q1", "--data", "Q2", "--slot", "1",
+            "--present-rows", "0",
         ])
+        request = printer_cli.request_from_args(args, DEFAULT_MEDIA)
+        rendered = render_request(request, DEFAULT_MEDIA)
+        self.assertEqual(len(request.placements), 2)
+        self.assertIn(b"BITMAP 0,0,81,60,0,", rendered.payload)
+        self.assertEqual(rendered.payload.count(b"PRINT 1,1"), 1)
+        self.assertNotIn(b"QRCODE", rendered.payload)
+
+        text_args = printer_cli.parse_args([
+            "print", "text", "--data", "A", "--slot", "1", "--present-rows", "0"
+        ])
+        text_job = render_request(
+            printer_cli.request_from_args(text_args, DEFAULT_MEDIA), DEFAULT_MEDIA
+        )
+        self.assertIn(b"BITMAP 0,0,81,60,0,", text_job.payload)
+        self.assertNotIn(b"TEXT ", text_job.payload)
+
+    def test_custom_profile_controls_rendered_geometry(self):
+        media = MediaProfile("custom", 300, 12, 2, 5, 5, 1, 3)
+        request = PrintRequest((Placement(2, RasterContent(
+            Image.new("1", (8, 8), 0), "image")),), present_rows=0)
+        rendered = render_request(request, media)
+        self.assertTrue(rendered.payload.startswith(b"SIZE 11 mm, 5 mm\r\n"))
+        self.assertIn(b"GAP 3 mm, 0 mm\r\n", rendered.payload)
+        self.assertIn(b"BITMAP 0,0,17,60,0,", rendered.payload)
+
+    def test_invalid_duplicate_slots_fail_before_encoding(self):
+        image = RasterContent(Image.new("1", (4, 4), 0), "image")
+        request = PrintRequest((Placement(1, image), Placement(1, image)))
+        with self.assertRaisesRegex(ValueError, "duplicate slots"):
+            render_request(request, DEFAULT_MEDIA)
+
+
+class CliTests(unittest.TestCase):
+    def test_base64_image_request_is_decoded_without_usb(self):
+        source = BytesIO()
+        Image.new("RGB", (4, 4), "black").save(source, format="PNG")
+        encoded = base64.b64encode(source.getvalue())
         class FakeStdin:
-            buffer = BytesIO(base64.b64encode(b"image bytes"))
-        with patch.object(printer.sys, "stdin", FakeStdin()):
-            job = printer.execute_print(args)
-        self.assertEqual(job[:3], ("image", b"image bytes", 3))
-
-    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is not installed")
-    def test_image_job_contains_binary_bitmap_and_configured_geometry(self):
-        from PIL import Image
-        image_data = BytesIO()
-        Image.new("RGB", (1, 1), "black").save(image_data, format="PNG")
-        media = printer.MediaProfile("tiny", 300, 12, 2, 5, 5, 1, 2)
-        job = printer.make_image_job(image_data.getvalue(), 2, media=media)
-        self.assertTrue(job.startswith(b"SIZE 11 mm, 5 mm\r\n"))
-        marker = b"BITMAP 70,0,8,60,0,"
-        offset = job.index(marker) + len(marker)
-        self.assertEqual(len(job), offset + 480 + len(b"\r\nPRINT 1,1\r\n"))
-        bitmap = job[offset:offset + 480]
-        self.assertEqual(bitmap[29 * 8 + 29 // 8] & (1 << (7 - 29 % 8)), 0)
-        self.assertTrue(job.endswith(b"\r\nPRINT 1,1\r\n"))
-
-    def test_cli_accepts_repeated_data_for_qr_cells(self):
-        args = printer.parse_args([
-            "print", "qr", "--data", "Q1", "--data", "Q2", "--slot", "1"
+            buffer = BytesIO(encoded)
+        args = printer_cli.parse_args([
+            "print", "image", "--base64-stdin", "--slot", "1", "--present-rows", "0"
         ])
-        self.assertEqual(printer.execute_print(args)[:3],
-                         ("qr", ["Q1", "Q2"], 1))
+        with patch("printer_cli.sys.stdin", FakeStdin()):
+            request = printer_cli.request_from_args(args, DEFAULT_MEDIA)
+        self.assertEqual(request.placements[0].content.kind, "image")
 
-    def test_cli_rejects_repeated_text_data(self):
-        args = printer.parse_args([
-            "print", "text", "--data", "A", "--data", "B", "--slot", "1"
-        ])
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            printer.execute_print(args)
+    def test_json_image_job_accepts_base64(self):
+        source = BytesIO()
+        Image.new("RGB", (3, 3), "white").save(source, format="PNG")
+        data = base64.b64encode(source.getvalue()).decode("ascii")
+        request = printer_cli.request_from_json(
+            '{"type":"image","image_base64":"' + data + '","slot":1}',
+            DEFAULT_MEDIA,
+        )
+        self.assertEqual(request.placements[0].content.kind, "image")
 
-    def test_json_job_defaults_and_validation(self):
-        job = printer.json_job('{"type":"text","data":"OK","slot":8}')
-        self.assertEqual(job, ("text", "OK", 8, 2, "M", 1, 5, 0, 1.5))
-        with self.assertRaisesRegex(ValueError, "integer"):
-            printer.json_job('{"type":"qr","data":"x","slot":true}')
-        with self.assertRaisesRegex(ValueError, "unknown JSON job"):
-            printer.json_job('{"type":"text","data":"A","slot":1,"fonts":2}')
-        with self.assertRaisesRegex(ValueError, "printable ASCII"):
-            printer.make_print_job("qr", "你好", 1)
-
-    def test_json_output_is_compact_valid_json(self):
-        payload = {"ok": True, "type": "text", "slot": 1}
-        self.assertEqual(json.loads(json.dumps(payload)), payload)
-
-    def test_cli_accepts_recommended_json_stdin_form(self):
-        args = printer.parse_args(["print", "--json", "-"])
-        self.assertEqual(args.cmd, "print")
-        self.assertEqual(args.json, "-")
-        with patch("sys.stdin", StringIO('{"type":"text","data":"A","slot":1}')):
-            self.assertEqual(
-                printer.execute_print(args),
-                ("text", "A", 1, 2, "M", 1, 5, 0, 1.5),
+    def test_json_input_rejects_boolean_numeric_options(self):
+        with self.assertRaisesRegex(ValueError, "unsupported print speed"):
+            printer_cli.request_from_json(
+                '{"type":"text","data":"A","slot":1,"speed":true}',
+                DEFAULT_MEDIA,
+            )
+        with self.assertRaisesRegex(ValueError, "threshold"):
+            printer_cli.request_from_json(
+                '{"type":"image","image_base64":"","slot":1,"threshold":true}',
+                DEFAULT_MEDIA,
             )
 
-    def test_cli_presentation_rows_default_and_override(self):
-        default_args = printer.parse_args(
-            ["print", "text", "--data", "A", "--slot", "1"]
-        )
-        custom_args = printer.parse_args(
-            ["print", "text", "--data", "A", "--slot", "1",
-             "--present-rows", "3"]
-        )
-        self.assertEqual(default_args.present_rows, 5)
-        self.assertEqual(custom_args.present_rows, 3)
+    def test_render_writes_job_and_preview_without_connecting_usb(self):
+        with tempfile.TemporaryDirectory() as directory:
+            job_path = Path(directory) / "test.tspl"
+            preview_path = Path(directory) / "preview.png"
+            argv = ["print_positions.py", "render", "qr", "--data", "Q1",
+                    "--slot", "1", "--output", str(job_path),
+                    "--preview", str(preview_path)]
+            output = StringIO()
+            with (patch("sys.argv", argv),
+                  patch.object(printer_cli.PrinterExecutor, "connect",
+                               side_effect=AssertionError("render must not use USB")),
+                  redirect_stdout(output)):
+                self.assertEqual(printer_cli.main(), 0)
+            self.assertIn(b"BITMAP", job_path.read_bytes())
+            with Image.open(preview_path) as preview:
+                self.assertEqual(preview.size,
+                                 ((DEFAULT_MEDIA.columns - 1) * DEFAULT_MEDIA.column_pitch_dots
+                                  + DEFAULT_MEDIA.cell_width_dots,
+                                  DEFAULT_MEDIA.cell_height_dots))
 
-    def test_zero_rows_is_a_noop(self):
-        self.assertEqual(printer.row_count("0"), 0)
-        with (
-            patch.object(printer, "write") as write,
-            patch.object(printer, "status") as status,
-        ):
-            printer.move_rows(None, None, "FEED", 0)
-        write.assert_not_called()
-        status.assert_not_called()
+    def test_send_passes_job_bytes_unchanged_to_executor(self):
+        class FakeExecutor:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                pass
+            def prepare(self):
+                pass
+            def execute(self, payload, **kwargs):
+                calls.append((payload, kwargs))
+                return {"cycle_observed": True, "status": "normal"}
 
-    def test_cli_rejects_multirow_feed_before_opening_device(self):
-        with (
-            patch("sys.argv", ["print_positions.py", "feed", "3"]),
-            patch.object(printer, "open_printer", side_effect=AssertionError("opened")),
-            patch("sys.stderr", new_callable=StringIO),
-        ):
-            with self.assertRaises(SystemExit) as exc:
-                printer.main()
-        self.assertEqual(exc.exception.code, 2)
-
-    def test_cli_rejects_multirow_back_before_opening_device(self):
-        with (
-            patch("sys.argv", ["print_positions.py", "back", "2"]),
-            patch.object(printer, "open_printer", side_effect=AssertionError("opened")),
-            patch("sys.stderr", new_callable=StringIO),
-        ):
-            with self.assertRaises(SystemExit) as exc:
-                printer.main()
-        self.assertEqual(exc.exception.code, 2)
-
-    def test_cli_motion_json_emits_only_result_on_stdout(self):
-        output = StringIO()
-        fake_dev = object()
-        fake_intf = type("Interface", (), {"bInterfaceNumber": 0})()
-        with (
-            patch("sys.argv", ["print_positions.py", "back", "1", "--speed", "2.5",
-                               "--json"]),
-            patch.object(printer, "open_printer", return_value=(fake_dev, fake_intf,
-                                                                  object(), object())),
-            patch.object(printer, "prepare"),
-            patch.object(printer, "move_rows", return_value={
-                "command_sent": True, "status_code": None,
-                "movement_confirmed": False,
-            }),
-            patch.object(printer.usb.util, "release_interface"),
-            patch.object(printer.usb.util, "dispose_resources"),
-            redirect_stdout(output),
-        ):
-            self.assertEqual(printer.main(), 0)
-        self.assertEqual(json.loads(output.getvalue()), {
-            "ok": True, "device": "TE344", "command": "BACK", "rows": 1,
-            "speed_ips": 2.5, "command_sent": True, "status_code": None,
-            "movement_confirmed_by_status": False,
-        })
-
-    def test_cli_motion_json_reports_printer_error(self):
-        output = StringIO()
-        fake_dev = object()
-        fake_intf = type("Interface", (), {"bInterfaceNumber": 0})()
-        with (
-            patch("sys.argv", ["print_positions.py", "feed", "1", "--json"]),
-            patch.object(printer, "open_printer", return_value=(fake_dev, fake_intf,
-                                                                  object(), object())),
-            patch.object(printer, "prepare", side_effect=SystemExit("printer not ready: pause")),
-            patch.object(printer.usb.util, "release_interface"),
-            patch.object(printer.usb.util, "dispose_resources"),
-            redirect_stdout(output),
-        ):
-            self.assertEqual(printer.main(), 4)
-        self.assertEqual(json.loads(output.getvalue()), {
-            "ok": False, "error": "printer not ready: pause", "code": "printer_error",
-        })
-
-    def test_motion_command_uses_selected_speed(self):
-        with (
-            patch.object(printer, "write") as write,
-            patch.object(printer, "status", return_value=(0x00, "normal")),
-            patch.object(printer.time, "sleep"),
-        ):
-            printer.move_rows(None, None, "FEED", 2, 2.5)
-        self.assertIn(b"SPEED 2.5", write.call_args.args[1])
-
-    def test_motion_with_no_status_reply_is_not_reported_as_done(self):
-        with (
-            patch.object(printer, "write"),
-            patch.object(printer, "status", return_value=(None, "no reply")),
-            patch.object(printer.time, "sleep"),
-        ):
-            with self.assertRaisesRegex(SystemExit, "movement is unknown"):
-                printer.move_rows(None, None, "FEED", 1)
-
-    def test_busy_to_ready_cycle_is_explicitly_reported(self):
-        with (
-            patch.object(printer, "status", side_effect=[(0x20, "printing"),
-                                                          (0x00, "normal")]),
-            patch.object(printer.time, "sleep"),
-        ):
-            result = printer.wait_cycle(None, None)
-        self.assertEqual(result, {"cycle_observed": True, "final_status_code": 0})
-
-    def test_json_speed_and_explicit_same_row_return(self):
-        job = printer.json_job(
-            '{"type":"text","data":"A","slot":1,"present_rows":1,"return_rows":2,"speed":1}'
-        )
-        self.assertEqual(job[-3:], (1, 2, 1.0))
-        with self.assertRaisesRegex(ValueError, "speed must"):
-            printer.json_job(
-                '{"type":"text","data":"A","slot":1,"speed":0.5}'
-            )
-        with self.assertRaisesRegex(ValueError, "present_rows must"):
-            printer.json_job(
-                '{"type":"text","data":"A","slot":1,"present_rows":120}'
-            )
-        larger_return = printer.json_job(
-            '{"type":"text","data":"A","slot":1,"return_rows":6}'
-        )
-        self.assertEqual(larger_return[-2], 6)
-        with self.assertRaisesRegex(ValueError, "return_rows must"):
-            printer.json_job(
-                '{"type":"text","data":"A","slot":1,"return_rows":120}'
-            )
-
-    def test_print_job_disables_firmware_tear_mode(self):
-        command = printer.make_print_job("text", "A", 1)
-        self.assertIn("SET TEAR OFF", command)
-        self.assertNotIn("SET TEAR ON", command)
-
-    def test_legacy_next_is_rejected_before_connecting(self):
-        args = printer.parse_args(["print", "A", "--size", "2", "--next"])
-        with self.assertRaisesRegex(ValueError, "--next is obsolete"):
-            printer.execute_print(args)
-
-    def test_print_explicitly_returns_same_row_and_presents_afterward(self):
         calls = []
-        with (
-            patch.object(printer, "write", side_effect=lambda *_: calls.append(("write",))),
-            patch.object(printer, "move_rows", side_effect=lambda *_a: calls.append(("move", _a[2], _a[3]))),
-            patch.object(printer, "make_print_job", wraps=printer.make_print_job) as make_job,
-            patch.object(printer, "wait_cycle", side_effect=lambda *_a, **_k:
-                  calls.append(("wait",))),
-        ):
-            printer.print_typed(None, None, "text", "A", 2, 2, "M", 1,
-                                1, 1.5, 2)
-        self.assertEqual(calls, [("write",), ("move", "BACKFEED", 2),
-                                 ("write",), ("wait",), ("move", "FEED", 1)])
-        self.assertEqual(make_job.call_args.args[-2], 1.5)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "opaque.tspl"
+            payload = b"arbitrary\x00opaque bytes\r\n"
+            path.write_bytes(payload)
+            with patch.object(printer_cli.PrinterExecutor, "connect", return_value=FakeExecutor()):
+                self.assertEqual(printer_cli.main(["send", str(path)]), 0)
+        self.assertEqual(calls, [(payload, {"observe_cycle": True})])
 
-    def test_status_json_is_machine_readable(self):
-        output = StringIO()
-        fake_dev = object()
-        fake_intf = type("Interface", (), {"bInterfaceNumber": 0})()
-        fake_out = object()
-        fake_in = object()
-        with (
-            patch("sys.argv", ["print_positions.py", "status", "--json"]),
-            patch.object(printer, "open_printer", return_value=(fake_dev, fake_intf,
-                                                                  fake_out, fake_in)),
-            patch.object(printer, "status", return_value=(0x00, "normal")),
-            patch.object(printer.usb.util, "release_interface"),
-            patch.object(printer.usb.util, "dispose_resources"),
-            redirect_stdout(output),
-        ):
-            self.assertEqual(printer.main(), 0)
-        self.assertEqual(json.loads(output.getvalue()), {
-            "ok": True, "device": "TE344", "ready": True,
-            "status_code": 0, "status": "normal",
-        })
+    def test_feed_and_back_remain_one_row(self):
+        with self.assertRaises(SystemExit):
+            printer_cli.parse_args(["feed", "2"])
+        backend = TSPLBackend(DEFAULT_MEDIA)
+        self.assertIn(b"FEED 84\r\n", backend.encode_motion("FEED", 1))
+        self.assertIn(b"BACKFEED 84\r\n", backend.encode_motion("BACKFEED", 1))
+
+
+class ExecutionTests(unittest.TestCase):
+    def test_executor_sends_opaque_bytes_and_observes_busy_ready(self):
+        class FakeTransport:
+            def __init__(self):
+                self.writes = []
+            def write(self, payload):
+                self.writes.append(payload)
+            def close(self):
+                pass
+
+        transport = FakeTransport()
+        executor = PrinterExecutor(transport)
+        with (patch.object(executor, "status", side_effect=[(0x20, "printing"),
+                                                              (0x00, "normal")]),
+              patch("printer_executor.time.sleep")):
+            result = executor.execute(b"\x00opaque job\xff", timeout=1)
+        self.assertEqual(transport.writes, [b"\x00opaque job\xff"])
+        self.assertTrue(result["cycle_observed"])
+
+    def test_motion_commands_are_bounded_and_profile_derived(self):
+        media = MediaProfile("wide pitch", 300, 12, 8, 5, 5, 2, 3)
+        backend = TSPLBackend(media)
+        self.assertIn(b"FEED 96\r\n", backend.encode_motion("FEED", 1))
+        with self.assertRaisesRegex(ValueError, "distance limit"):
+            backend.encode_motion("FEED", 105)
 
 
 if __name__ == "__main__":

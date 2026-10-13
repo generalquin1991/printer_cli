@@ -3,7 +3,7 @@
 import io
 from dataclasses import dataclass
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,7 @@ class RasterContent:
 @dataclass(frozen=True)
 class TextContent:
     text: str
+    font: int = 2
 
 
 def decode_image(image_bytes, threshold=128, max_bytes=30_000_000,
@@ -59,3 +60,18 @@ def generate_qr(data, ecc="M", module_dots=1):
     qr.make(fit=True)
     image = qr.make_image(fill_color="black", back_color="white").convert("1")
     return RasterContent(image, "qr")
+
+
+def generate_text(text, font=2):
+    if not isinstance(text, str) or not text:
+        raise ValueError("text must be a non-empty string")
+    if any(ord(char) < 32 or ord(char) > 126 for char in text):
+        raise ValueError("text must contain printable ASCII characters only")
+    font_sizes = {1: 12, 2: 20, 3: 24, 4: 32, 5: 48}
+    if isinstance(font, bool) or font not in font_sizes:
+        raise ValueError("font must be 1..5")
+    face = ImageFont.load_default(size=font_sizes[font])
+    bounds = face.getbbox(text)
+    image = Image.new("L", (bounds[2] - bounds[0], bounds[3] - bounds[1]), "white")
+    ImageDraw.Draw(image).text((-bounds[0], -bounds[1]), text, font=face, fill="black")
+    return RasterContent(image.point(lambda value: 0 if value < 128 else 255).convert("1"), "text")

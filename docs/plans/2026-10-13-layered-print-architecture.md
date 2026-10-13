@@ -9,10 +9,10 @@ Separate content generation, media layout, printer-language encoding, and device
 1. [x] Extract media profile and immutable content/job data types from the CLI script.
 2. [x] Move image decoding and QR matrix generation into an application-content module with no USB or TSPL dependency.
 3. [x] Add a layout module that places content into configured label slots and produces a printer-independent monochrome row raster.
-4. Move TSPL setup and bitmap serialization into a printer backend that consumes the row raster.
-5. Move USB discovery, transfer, and status handling behind an execution interface that accepts opaque job bytes.
-6. Keep the CLI as a thin adapter; add `render` and `send` commands while retaining `print text/qr/image` convenience commands.
-7. Add isolated unit tests, update both READMEs, and run hardware-free verification. Hardware acceptance remains manual.
+4. [x] Move TSPL setup and bitmap serialization into a printer backend that consumes the row raster.
+5. [x] Move USB discovery, transfer, and status handling behind an execution interface that accepts opaque job bytes.
+6. [x] Keep the CLI as an adapter; add `render` and `send` commands while retaining `print text/qr/image` convenience commands.
+7. [x] Add isolated unit tests, update both READMEs, and run hardware-free verification. Hardware acceptance remains manual.
 
 ## Constraints
 
@@ -25,5 +25,5 @@ Separate content generation, media layout, printer-language encoding, and device
 ## Checkpoints
 
 - Batch 1: steps 1-3, verify content/layout tests and default CLI compatibility.
-- Batch 2: steps 4-7, verify rendered job bytes, mocked execution, CLI behavior, and documentation.
+- Batch 2: steps 4-7, verified rendered job bytes, mocked execution, CLI behavior, and documentation; 15 unit tests pass.
 - Physical image/QR print and scan validation is not automated and must be reported separately.
