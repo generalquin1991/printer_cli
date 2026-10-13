@@ -50,6 +50,26 @@ base64 < ./logo.png | .venv/bin/python print_positions.py render image \
 - `feed [N]` and `back [N]` accept 1–100 rows (default 1). By default they send and wait for each row separately. `feed N --continuous` sends one `FEED` command for `N` row pitches; it is not available for `back`. A completed status does not prove physical movement. These are relative movements, not undo or alignment operations.
 - `--speed` supports `1, 1.5, 2, 2.5, 3, 3.5, 4, 5` IPS. `capabilities` validates and reports media geometry without connecting to the printer.
 
+### Repeated mixed-row test
+
+After manually returning the media to the starting position, this loop prints one row with `A/B/C/D` in slots 1–4 and `Q1/Q2/Q3/Q4` as QR codes in slots 5–8. It repeats ten times, uses one combined feed command for four rows, waits two seconds, then performs a three-row backfeed one row at a time:
+
+```zsh
+(
+  set -e
+  for i in {1..10}; do
+    printf '=== cycle %s/10 ===\n' "$i"
+    printf '%s\n' '{"type":"row","placements":[{"type":"text","slot":1,"data":"A","font":3},{"type":"text","slot":2,"data":"B","font":3},{"type":"text","slot":3,"data":"C","font":3},{"type":"text","slot":4,"data":"D","font":3},{"type":"qr","slot":5,"data":"Q1","module_size":2,"ecc":"M"},{"type":"qr","slot":6,"data":"Q2","module_size":2,"ecc":"M"},{"type":"qr","slot":7,"data":"Q3","module_size":2,"ecc":"M"},{"type":"qr","slot":8,"data":"Q4","module_size":2,"ecc":"M"}],"present_rows":0,"return_rows":0}' \
+      | .venv/bin/python print_positions.py print --json -
+    .venv/bin/python print_positions.py feed 4 --continuous
+    sleep 2
+    .venv/bin/python print_positions.py back 3
+  done
+)
+```
+
+Stop with `Ctrl-C` if the ribbon loosens, wrinkles, stops moving unexpectedly, or the media path jams. `status 0x00: normal` confirms only the printer response, not the physical movement or alignment. `feed 4 --continuous` sends one `FEED 336`; `back 3` sends three separate `BACKFEED 84` commands.
+
 ### JSON requests
 
 An application can provide one request on stdin:

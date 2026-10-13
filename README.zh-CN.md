@@ -50,6 +50,26 @@ base64 < ./logo.png | .venv/bin/python print_positions.py render image \
 - `feed [N]` 和 `back [N]` 支持 1～100 行，省略数量时默认为 1。默认逐行发送，并等待状态正常后再发送下一行；例如 `feed 5` 会依次发送 5 条独立的 `FEED 84`。只有 `feed` 支持 `--continuous`，例如 `feed 5 --continuous` 会一次发送 `FEED 420`。状态正常不能证明纸实际移动；进退纸是相对移动，不是撤销或对位功能。
 - `--speed` 支持 `1, 1.5, 2, 2.5, 3, 3.5, 4, 5` IPS。`capabilities` 可校验并显示介质几何参数，不连接打印机。
 
+## 重复混合打印测试
+
+先手动将纸张归位到起始位置。下面的循环每次打印一行：第 1～4 槽为 `A/B/C/D`，第 5～8 槽为内容 `Q1/Q2/Q3/Q4` 的二维码。共执行 10 次；每次打印后一次性前进 4 行，等待 2 秒，再将 3 行回退逐行执行：
+
+```zsh
+(
+  set -e
+  for i in {1..10}; do
+    printf '=== cycle %s/10 ===\n' "$i"
+    printf '%s\n' '{"type":"row","placements":[{"type":"text","slot":1,"data":"A","font":3},{"type":"text","slot":2,"data":"B","font":3},{"type":"text","slot":3,"data":"C","font":3},{"type":"text","slot":4,"data":"D","font":3},{"type":"qr","slot":5,"data":"Q1","module_size":2,"ecc":"M"},{"type":"qr","slot":6,"data":"Q2","module_size":2,"ecc":"M"},{"type":"qr","slot":7,"data":"Q3","module_size":2,"ecc":"M"},{"type":"qr","slot":8,"data":"Q4","module_size":2,"ecc":"M"}],"present_rows":0,"return_rows":0}' \
+      | .venv/bin/python print_positions.py print --json -
+    .venv/bin/python print_positions.py feed 4 --continuous
+    sleep 2
+    .venv/bin/python print_positions.py back 3
+  done
+)
+```
+
+如果碳带松弛、起皱、异常停止或纸路卡住，按 `Ctrl-C` 停止。`status 0x00: normal` 只能说明打印机返回正常，不能证明纸张实际移动或已经对正。`feed 4 --continuous` 会一次发送 `FEED 336`；`back 3` 会发送 3 次独立的 `BACKFEED 84`。
+
 ## JSON 请求
 
 应用可以将一个请求通过 stdin 传入：
